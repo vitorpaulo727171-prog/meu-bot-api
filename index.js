@@ -380,7 +380,7 @@ KITS PARA FESTAS (SOB ENCOMENDA):
 INFORMAÇÕES IMPORTANTES:
 • Formas de Pagamento: PIX e Dinheiro
 • Endereço de Retirada: Rua Raimundo Lemos Dias, 68
-• Site para Encomendas: https://lojams.rf.gd (com informações completas e fotos)
+• Site para Encomendas: https://lojams.rf.gd 
 • Produtos marcados como INDISPONÍVEL estão sem estoque no momento
 
 Orientação: Sempre informe o preço e disponibilidade quando mencionar produtos. Para itens sem estoque, sugira alternativas similares. Direcione o cliente ao site para ver fotos e fazer pedidos.
