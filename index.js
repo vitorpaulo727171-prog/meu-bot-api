@@ -12,7 +12,7 @@ app.use(express.json());
 // Configuração da API do GitHub
 const GITHUB_API_CONFIG = {
   endpoint: "https://models.inference.ai.azure.com",
-  apiKey: "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",
+  apiKey: "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",
   model: "gpt-4o-mini"
 };
 
