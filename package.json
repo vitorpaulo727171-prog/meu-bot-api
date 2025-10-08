@@ -1,13 +1,14 @@
 {
   "name": "autoreply-api",
   "version": "1.0.0",
-  "description": "API para AutoReply App",
+  "description": "API para AutoReply App com IA",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.7"
   }
 }
