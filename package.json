@@ -1,7 +1,7 @@
 {
   "name": "ia-professora-calculo",
-  "version": "1.0.0",
-  "description": "IA Professora de Cálculo usando GitHub Models",
+  "version": "2.0.0",
+  "description": "IA Professora de Cálculo - Corrigido",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
