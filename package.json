@@ -1,7 +1,7 @@
 {
   "name": "autoreply-webhook",
   "version": "1.0.0",
-  "description": "Webhook server for AutoReply integration with MySQL context",
+  "description": "Webhook server for AutoReply integration with Railway MySQL",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
