@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,286 +9,118 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Configuração da API
-const GITHUB_API_CONFIG = {
-  endpoint: "https://models.inference.ai.azure.com",
-  apiKey: process.env.GITHUB_TOKEN,
-  model: "gpt-4"
-};
-
-// Verificação detalhada do token
-console.log('🔐 Verificando configuração da IA:');
-console.log('   - Token presente:', !!process.env.GITHUB_TOKEN);
-console.log('   - Token inicia com:', process.env.GITHUB_TOKEN ? process.env.GITHUB_TOKEN.substring(0, 10) + '...' : 'N/A');
-
-// Sistema de mensagem para a IA
-function getSystemMessage() {
-  return `Você é a Ana, atendente da loja "Mercado dos Sabores". 
-  
-CATÁLOGO:
-- Brownies: R$ 4,00 (Ferrero, Ninho, Paçoca, Doce de Leite, Pistache, Brigadeiro)
-- Dindins: R$ 5,50-6,00 (Oreo, Ninho com Avelã, Ninho com Morango, Paçoca, Browninho)
-- Bolos no Pote: R$ 11,00-12,00 (Ferrero, Maracujá com Chocolate, Ninho com Morango)
-
-Seja natural e prestativa.`;
-}
-
-// Sistema de fallback SIMPLES para teste
-class FallbackSystem {
-  generateResponse(message) {
-    const lowerMsg = message.toLowerCase();
-    
-    if (lowerMsg.includes('cardápio') || lowerMsg.includes('menu')) {
-      return "📋 FALLBACK: Cardápio - Brownies R$ 4,00, Dindins R$ 5,50-6,00";
-    } else if (lowerMsg.includes('brownie')) {
-      return "🍫 FALLBACK: Brownies - Temos Ferrero, Ninho, Paçoca por R$ 4,00";
-    } else {
-      return "🤖 FALLBACK: Olá! Sou a Ana do Mercado dos Sabores!";
-    }
-  }
-}
-
-const fallbackSystem = new FallbackSystem();
-
-// Função para testar a IA do GitHub
-async function testGitHubAI() {
-  if (!GITHUB_API_CONFIG.apiKey) {
-    return { success: false, error: 'Token não configurado' };
-  }
-
-  try {
-    console.log('🧪 Testando conexão com GitHub AI...');
-    
-    const testResponse = await fetch(`${GITHUB_API_CONFIG.endpoint}/openai/deployments/${GITHUB_API_CONFIG.model}/chat/completions?api-version=2023-12-01-preview`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GITHUB_API_CONFIG.apiKey}`,
-        'api-key': GITHUB_API_CONFIG.apiKey
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: "system",
-            content: "Responda apenas com 'TESTE_IA_FUNCIONANDO'"
-          },
-          {
-            role: "user",
-            content: "Teste de conexão"
-          }
-        ],
-        max_tokens: 10,
-        temperature: 0.1
-      }),
-      timeout: 10000
-    });
-
-    if (!testResponse.ok) {
-      const errorText = await testResponse.text();
-      return { 
-        success: false, 
-        error: `Erro HTTP: ${testResponse.status}`,
-        details: errorText
-      };
-    }
-
-    const data = await testResponse.json();
-    return { 
-      success: true, 
-      data: data,
-      message: 'Conexão com IA estabelecida com sucesso!'
-    };
-
-  } catch (error) {
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-// Função principal da IA
-async function getAIResponse(userMessage) {
-  const testResult = await testGitHubAI();
-  
-  if (!testResult.success) {
-    console.log('❌ IA não disponível - Usando fallback');
-    console.log('   Erro:', testResult.error);
-    return {
-      response: fallbackSystem.generateResponse(userMessage),
-      source: 'fallback',
-      error: testResult.error
-    };
-  }
-
-  try {
-    console.log('✅ IA disponível - Processando com GitHub AI...');
-    
-    const response = await fetch(`${GITHUB_API_CONFIG.endpoint}/openai/deployments/${GITHUB_API_CONFIG.model}/chat/completions?api-version=2023-12-01-preview`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GITHUB_API_CONFIG.apiKey}`,
-        'api-key': GITHUB_API_CONFIG.apiKey
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: "system",
-            content: getSystemMessage()
-          },
-          {
-            role: "user",
-            content: userMessage
-          }
-        ],
-        max_tokens: 300,
-        temperature: 0.7
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Erro API: ${response.status}`);
-    }
-
-    const data = await response.json();
-    
-    if (data.choices && data.choices[0].message) {
-      return {
-        response: data.choices[0].message.content,
-        source: 'github-ai',
-        error: null
-      };
-    } else {
-      throw new Error('Resposta inválida da API');
-    }
-
-  } catch (error) {
-    console.log('❌ Erro na IA - Usando fallback:', error.message);
-    return {
-      response: fallbackSystem.generateResponse(userMessage),
-      source: 'fallback',
-      error: error.message
-    };
-  }
-}
-
-// Rotas de Teste
+// Configuração do cliente OpenAI para GitHub
+const client = new OpenAI({
+  baseURL: "https://models.inference.ai.azure.com", // ou "https://models.github.ai/inference"
+  apiKey: process.env.GITHUB_TOKEN
+});
 
 // Rota principal
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'API de Teste IA - Mercado dos Sabores',
+    message: 'IA Professora de Cálculo - API Funcionando!',
     status: 'online',
-    endpoints: {
-      test: '/test-ai?message=sua_mensagem',
-      status: '/status',
-      health: '/health'
-    }
+    instrucoes: 'Envie POST para /perguntar com { "pergunta": "sua pergunta" }'
   });
 });
 
-// Rota de status detalhado
-app.get('/status', async (req, res) => {
-  const testResult = await testGitHubAI();
-  
-  res.json({
-    status: 'online',
-    timestamp: new Date().toISOString(),
-    ia_configurada: !!process.env.GITHUB_TOKEN,
-    ia_funcionando: testResult.success,
-    ia_erro: testResult.error,
-    mensagem: testResult.success ? '✅ IA GitHub funcionando!' : '❌ IA GitHub com problemas'
-  });
-});
-
-// Rota de saúde
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    service: 'Mercado dos Sabores Bot',
-    ia: process.env.GITHUB_TOKEN ? 'configurada' : 'não configurada'
-  });
-});
-
-// Rota de teste principal
-app.get('/test-ai', async (req, res) => {
-  const { message } = req.query;
-  
-  if (!message) {
-    return res.json({ 
-      error: 'Forneça o parâmetro ?message=sua_mensagem',
-      exemplo: 'https://meu-bot-api-9dz3.onrender.com/test-ai?message=Qual o cardápio?'
-    });
-  }
-  
+// Rota para fazer perguntas à IA
+app.post('/perguntar', async (req, res) => {
   try {
-    const startTime = Date.now();
-    const result = await getAIResponse(message);
-    const responseTime = Date.now() - startTime;
-    
+    const { pergunta } = req.body;
+
+    if (!pergunta) {
+      return res.status(400).json({ 
+        error: 'Por favor, forneça uma pergunta no corpo da requisição' 
+      });
+    }
+
+    console.log(`📚 Pergunta recebida: ${pergunta}`);
+
+    const response = await client.chat.completions.create({
+      messages: [
+        { 
+          role: "system", 
+          content: `Você é uma professora de cálculo muito paciente e didática. 
+          Explique conceitos matemáticos de forma clara e passo a passo.
+          Use exemplos práticos e seja encorajadora.
+          Se a pergunta não for sobre matemática, gentilmente redirecione para o tema.` 
+        },
+        { 
+          role: "user", 
+          content: pergunta 
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+      model: "gpt-4"
+    });
+
+    const resposta = response.choices[0].message.content;
+
+    console.log('✅ Resposta da IA gerada');
+
     res.json({
-      mensagem_original: message,
-      resposta: result.response,
-      fonte: result.source,
-      tempo_resposta: `${responseTime}ms`,
-      ia_funcionando: result.source === 'github-ai',
-      erro: result.error,
+      pergunta: pergunta,
+      resposta: resposta,
+      professora: "IA Professora de Cálculo",
       timestamp: new Date().toISOString()
     });
+
   } catch (error) {
-    res.status(500).json({ 
-      error: 'Erro interno',
-      detalhes: error.message 
-    });
+    console.error('❌ Erro:', error.message);
+    
+    // Resposta de fallback em caso de erro
+    const fallbackResponse = {
+      pergunta: req.body.pergunta,
+      resposta: "Olá! Sou sua professora de cálculo. No momento estou com dificuldades técnicas. Por favor, tente novamente em alguns instantes. Enquanto isso, lembre-se: a prática leva à perfeição! 📚✨",
+      professora: "IA Professora de Cálculo (Modo Offline)",
+      erro: error.message,
+      timestamp: new Date().toISOString()
+    };
+
+    res.status(500).json(fallbackResponse);
   }
 });
 
-// Rota do webhook para AutoReply
-app.post('/webhook', async (req, res) => {
-  console.log('📩 Mensagem recebida:', req.body);
-  
-  const { senderMessage, senderName, isMessageFromGroup } = req.body;
-  
-  if (isMessageFromGroup) {
-    return res.json({ data: [{ message: "" }] });
-  }
-  
+// Rota de teste simples
+app.get('/teste', async (req, res) => {
   try {
-    const result = await getAIResponse(senderMessage);
-    
-    console.log(`💬 Resposta para ${senderName}:`);
-    console.log(`   Fonte: ${result.source}`);
-    console.log(`   IA funcionando: ${result.source === 'github-ai'}`);
-    if (result.error) console.log(`   Erro: ${result.error}`);
-    
-    res.json({
-      data: [{ message: result.response }]
+    const response = await client.chat.completions.create({
+      messages: [
+        { 
+          role: "system", 
+          content: "Você é uma professora de cálculo. Responda de forma educada." 
+        },
+        { 
+          role: "user", 
+          content: "O que é uma derivada?" 
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 300,
+      model: "gpt-4"
     });
+
+    res.json({
+      pergunta: "O que é uma derivada?",
+      resposta: response.choices[0].message.content,
+      status: "IA funcionando corretamente"
+    });
+
   } catch (error) {
-    console.error('❌ Erro no webhook:', error);
-    const fallback = fallbackSystem.generateResponse(senderMessage);
-    res.json({ 
-      data: [{ message: fallback }]
+    res.json({
+      pergunta: "O que é uma derivada?",
+      resposta: "Uma derivada representa a taxa de variação instantânea de uma função. Imagine que você está dirigindo um carro - a derivada da posição em relação ao tempo é a velocidade! 🚗📈",
+      status: "Modo fallback - IA offline"
     });
   }
 });
 
-// Iniciar servidor com teste automático
-app.listen(PORT, async () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`🔗 URL: https://meu-bot-api-9dz3.onrender.com`);
-  console.log(`🧪 Iniciando teste automático da IA...`);
-  
-  // Teste automático ao iniciar
-  const testResult = await testGitHubAI();
-  if (testResult.success) {
-    console.log('✅ IA GitHub: FUNCIONANDO PERFEITAMENTE!');
-  } else {
-    console.log('❌ IA GitHub: FALHOU -', testResult.error);
-    console.log('📝 Usando sistema de fallback');
-  }
-  
-  console.log(`📞 Webhook pronto: https://meu-bot-api-9dz3.onrender.com/webhook`);
-  console.log(`🔍 Teste: https://meu-bot-api-9dz3.onrender.com/test-ai?message=Oi`);
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`🎓 IA Professora de Cálculo rodando na porta ${PORT}`);
+  console.log(`📚 Endpoint: http://localhost:${PORT}/perguntar`);
+  console.log(`🧪 Teste: http://localhost:${PORT}/teste`);
+  console.log(`🔧 Usando GitHub Models: ${!!process.env.GITHUB_TOKEN}`);
 });
