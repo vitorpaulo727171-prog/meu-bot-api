@@ -139,15 +139,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Tabela conversations verificada/criada');
     
-    // Tenta criar índices (pode falhar, mas não é crítico)
-    try {
-      await connection.execute('CREATE INDEX IF NOT EXISTS session_index ON conversations (session_id)');
-      await connection.execute('CREATE INDEX IF NOT EXISTS sender_index ON conversations (sender_name)');
-      console.log('✅ Índices criados/verificados');
-    } catch (indexError) {
-      console.log('⚠️  Índices podem já existir, continuando...');
-    }
-    
     // Testa inserção e leitura
     console.log('🔄 Testando inserção e leitura...');
     const testSessionId = 'test_session_' + Date.now();
@@ -214,20 +205,19 @@ async function saveConversation(conversationData) {
 
     console.log(`💾 Salvando conversa para: ${sessionId}`);
     
-    // Convertendo valores para garantir tipos corretos
     const [result] = await pool.execute(
       `INSERT INTO conversations 
        (session_id, sender_name, group_name, is_group_message, sender_message, ai_response, message_datetime, receive_message_app) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        String(sessionId),
-        String(conversationData.senderName || ''),
-        String(conversationData.groupName || ''),
-        Boolean(conversationData.isMessageFromGroup || false),
-        String(conversationData.senderMessage || ''),
-        String(conversationData.aiResponse || ''),
-        Number(conversationData.messageDateTime || Date.now()),
-        String(conversationData.receiveMessageApp || 'unknown')
+        sessionId,
+        conversationData.senderName || '',
+        conversationData.groupName || '',
+        conversationData.isMessageFromGroup ? 1 : 0,
+        conversationData.senderMessage || '',
+        conversationData.aiResponse || '',
+        conversationData.messageDateTime || Date.now(),
+        conversationData.receiveMessageApp || 'unknown'
       ]
     );
     
@@ -236,12 +226,11 @@ async function saveConversation(conversationData) {
     
   } catch (error) {
     console.error('❌ Erro ao salvar conversa:', error.message);
-    console.error('📋 Detalhes do erro:', error);
     return null;
   }
 }
 
-// Função para buscar histórico de conversas (CORRIGIDA)
+// Função para buscar histórico de conversas (CORRIGIDA - sem LIMIT com parâmetro)
 async function getConversationHistory(senderName, groupName, isMessageFromGroup, limit = 6) {
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, sem histórico');
@@ -253,17 +242,15 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
     console.log(`📚 Buscando histórico para sessão: ${sessionId}`);
     
-    // Garantindo que limit seja um número
-    const queryLimit = parseInt(limit);
-    
-    // Query corrigida - garantindo tipos de parâmetros
+    // CORREÇÃO: Usar template string para LIMIT em vez de parâmetro
+    const safeLimit = parseInt(limit);
     const [rows] = await pool.execute(
       `SELECT sender_message, ai_response, created_at 
        FROM conversations 
        WHERE session_id = ? 
        ORDER BY created_at DESC 
-       LIMIT ?`,
-      [String(sessionId), queryLimit]
+       LIMIT ${safeLimit}`,  // LIMIT fixo na query, não como parâmetro
+      [sessionId]
     );
     
     console.log(`✅ Histórico carregado: ${rows.length} mensagens`);
@@ -272,7 +259,6 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
   } catch (error) {
     console.error('❌ Erro ao buscar histórico:', error.message);
     console.error('📋 Código do erro:', error.code);
-    console.error('📋 Stack trace:', error.stack);
     return [];
   }
 }
@@ -284,31 +270,27 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   try {
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     
-    // Método mais simples e compatível para limpeza
+    // Método alternativo mais simples
     const [recentIds] = await pool.execute(
       `SELECT id FROM conversations 
        WHERE session_id = ? 
        ORDER BY created_at DESC 
        LIMIT 15`,
-      [String(sessionId)]
+      [sessionId]
     );
     
     if (recentIds.length > 0) {
       const keepIds = recentIds.map(row => row.id);
+      const placeholders = keepIds.map(() => '?').join(',');
       
-      if (keepIds.length > 0) {
-        // Cria uma string com os IDs para a query
-        const placeholders = keepIds.map(() => '?').join(',');
-        
-        await pool.execute(
-          `DELETE FROM conversations 
-           WHERE session_id = ? AND id NOT IN (${placeholders})`,
-          [String(sessionId), ...keepIds]
-        );
-      }
+      await pool.execute(
+        `DELETE FROM conversations 
+         WHERE session_id = ? AND id NOT IN (${placeholders})`,
+        [sessionId, ...keepIds]
+      );
+      
+      console.log(`🧹 Mensagens antigas limpas para: ${sessionId}`);
     }
-    
-    console.log(`🧹 Mensagens antigas limpas para: ${sessionId}`);
   } catch (error) {
     console.error('❌ Erro ao limpar mensagens antigas:', error.message);
   }
@@ -449,16 +431,12 @@ app.get('/db-status', async (req, res) => {
       'SELECT id, sender_name, created_at FROM conversations ORDER BY id DESC LIMIT 5'
     );
 
-    // Informações do servidor
-    const [serverInfo] = await pool.execute('SELECT VERSION() as version, NOW() as server_time');
-
     res.json({
       status: 'connected',
       message: 'MySQL Railway está funcionando perfeitamente!',
       connectionTest: testResult[0].connection_test,
       totalConversations: countResult[0].total,
       recentConversations: recentConversations,
-      serverInfo: serverInfo[0],
       config: {
         host: dbConfig.host,
         database: dbConfig.database,
@@ -473,6 +451,55 @@ app.get('/db-status', async (req, res) => {
       message: 'Erro no MySQL Railway',
       error: error.message,
       mysqlEnabled: mysqlEnabled
+    });
+  }
+});
+
+// Rota para testar a query problemática
+app.get('/test-limit-query', async (req, res) => {
+  try {
+    if (!mysqlEnabled || !pool) {
+      return res.json({ error: 'MySQL não disponível' });
+    }
+
+    const testResults = {};
+    
+    // Teste 1: Query com LIMIT como string template (deve funcionar)
+    const [test1] = await pool.execute(
+      `SELECT sender_message, ai_response, created_at 
+       FROM conversations 
+       WHERE session_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT 5`,  // LIMIT fixo
+      ['test_user']
+    );
+    testResults.limit_fixed = test1;
+    
+    // Teste 2: Query com LIMIT como parâmetro (pode falhar)
+    try {
+      const [test2] = await pool.execute(
+        `SELECT sender_message, ai_response, created_at 
+         FROM conversations 
+         WHERE session_id = ? 
+         ORDER BY created_at DESC 
+         LIMIT ?`,
+        ['test_user', 5]
+      );
+      testResults.limit_parameter = { success: true, data: test2 };
+    } catch (error) {
+      testResults.limit_parameter = { success: false, error: error.message };
+    }
+    
+    res.json({
+      status: 'success',
+      tests: testResults
+    });
+    
+  } catch (error) {
+    res.json({
+      status: 'error',
+      message: 'Erro nos testes de LIMIT',
+      error: error.message
     });
   }
 });
@@ -516,54 +543,6 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Rota para testar queries individuais
-app.get('/test-query', async (req, res) => {
-  try {
-    if (!mysqlEnabled || !pool) {
-      return res.json({ error: 'MySQL não disponível' });
-    }
-
-    const testResults = {};
-    
-    // Teste 1: Query simples
-    const [test1] = await pool.execute('SELECT 1 as test_value');
-    testResults.simple_query = test1[0];
-    
-    // Teste 2: Inserção
-    const testSessionId = 'test_query_' + Date.now();
-    const [test2] = await pool.execute(
-      'INSERT INTO conversations (session_id, sender_name, sender_message, ai_response) VALUES (?, ?, ?, ?)',
-      [testSessionId, 'test_user', 'Test message', 'Test response']
-    );
-    testResults.insert = { insertId: test2.insertId };
-    
-    // Teste 3: Seleção com WHERE
-    const [test3] = await pool.execute(
-      'SELECT * FROM conversations WHERE session_id = ? ORDER BY created_at DESC LIMIT ?',
-      [testSessionId, 5]
-    );
-    testResults.select_with_params = test3;
-    
-    // Teste 4: Limpeza
-    await pool.execute('DELETE FROM conversations WHERE session_id = ?', [testSessionId]);
-    testResults.cleanup = 'done';
-    
-    res.json({
-      status: 'success',
-      message: 'Todas as queries funcionaram corretamente',
-      tests: testResults
-    });
-    
-  } catch (error) {
-    res.json({
-      status: 'error',
-      message: 'Erro nos testes de query',
-      error: error.message,
-      stack: error.stack
-    });
-  }
-});
-
 // Rota raiz
 app.get('/', (req, res) => {
   res.json({ 
@@ -576,7 +555,7 @@ app.get('/', (req, res) => {
       health: 'GET /health',
       ping: 'GET /ping',
       db_status: 'GET /db-status',
-      test_query: 'GET /test-query',
+      test_limit_query: 'GET /test-limit-query',
       conversations: 'GET /conversations (admin)'
     }
   });
@@ -598,8 +577,8 @@ async function startServer() {
     console.log(`🎉 Servidor rodando na porta ${PORT}`);
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🔍 Health: GET /health`);
-    console.log(`📊 Status MySQL: GET /db_status`);
-    console.log(`🧪 Teste de queries: GET /test-query`);
+    console.log(`📊 Status MySQL: GET /db-status`);
+    console.log(`🧪 Teste de LIMIT: GET /test-limit-query`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     
     if (mysqlEnabled) {
