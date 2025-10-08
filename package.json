@@ -1,14 +1,16 @@
 {
-  "name": "ia-professora-calculo",
-  "version": "2.0.0",
-  "description": "IA Professora de Cálculo - Corrigido",
+  "name": "autoreply-webhook",
+  "version": "1.0.0",
+  "description": "Webhook server for AutoReply integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.0",
-    "cors": "^2.8.5",
-    "openai": "^4.20.0"
+    "express": "^4.18.2",
+    "openai": "^4.20.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
