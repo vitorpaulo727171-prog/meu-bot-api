@@ -9,91 +9,151 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Configuração da API do GitHub
+// Configuração SEGURA - apenas variável de ambiente
 const GITHUB_API_CONFIG = {
   endpoint: "https://models.inference.ai.azure.com",
-  apiKey: "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",
-  model: "gpt-4o-mini"
+  apiKey: process.env.GITHUB_TOKEN, // ⚠️ APENAS VARIÁVEL DE AMBIENTE
+  model: "gpt-4"
 };
 
-// Mensagem do sistema com informações da loja
-function getSystemMessage() {
-  return `Você é um assistente virtual da Loja 'Mercado dos Sabores'. Seja prestativo, educado e claro nas respostas.
-
-CATÁLOGO COMPLETO DE PRODUTOS:
-
-BROWNIES (R$ 4,00 cada):
-• Brownie Ferrero - Brownie intenso com recheio de brigadeiro 50% cacau
-• Brownie Beijinho - Brownie macio com recheio cremoso de coco (INDISPONÍVEL)
-• Brownie Doce de Leite - Brownie macio com recheio cremoso de doce de leite
-• Brownie Ninho - Brownie molhadinho com recheio cremoso de leite Ninho
-• Brownie Paçoca - Brownie molhadinho com recheio cremoso de paçoca
-• Brownie Pistache - Brownie com casquinha crocante, interior molhadinho
-• Brownie de Brigadeiro - Brownie com casquinha crocante, interior molhadinho
-
-DINDINS GOURMET:
-• Dindin Oreo - R$ 5,50
-• Dindin Ninho com Avelã - R$ 6,00
-• Dindin Ninho com Geleia de Morango - R$ 6,00
-• Dindin Paçoca - R$ 5,50
-• Dindin Browninho - R$ 5,50
-
-BOLOS NO POTE:
-• Bolo de Pote Cenoura com Chocolate - R$ 10,00 (INDISPONÍVEL)
-• Bolo de Pote Coco com Abacaxi - R$ 10,50 (INDISPONÍVEL)
-• Bolo de Pote Ferrero - R$ 12,00
-• Bolo de Pote Maracujá com Chocolate - R$ 12,00
-• Bolo de Pote Ninho com Geleia de Morango - R$ 11,00
-• Bolo de Pote Prestígio - R$ 10,00 (INDISPONÍVEL)
-
-BOLOS INTEIROS (SOB ENCOMENDA):
-• Bolo de Chocolate (500g) - R$ 27,00
-• Bolo Indiano - R$ 6,00 (INDISPONÍVEL)
-
-SOBREMESAS:
-• Delícia de Abacaxi - R$ 5,50
-• Pavê KitKat - R$ 6,50
-• Pudim - R$ 3,50 (INDISPONÍVEL)
-• Sensação - R$ 6,50
-• Torta Cookie - R$ 6,50
-• Torta de Limão - R$ 5,00
-
-EMPADAS:
-• Empada Camarão - R$ 6,00
-• Empada Carne do Sol - R$ 5,50 (INDISPONÍVEL)
-• Empada Frango - R$ 4,00
-
-SALGADOS:
-• Coxinha - R$ 5,00
-• Salgado Frito Carne com Queijo - R$ 5,50
-• Salgado Frito Misto - R$ 4,70
-• Salgado Salsicha - R$ 4,00
-
-KITS PARA FESTAS (SOB ENCOMENDA):
-• Kit 100 Docinhos - R$ 120,00 (25% OFF)
-• Kit 50 Docinhos - R$ 60,00 (25% OFF)
-• Kit 100 Salgados - R$ 65,00
-• Kit 50 Salgados - R$ 32,50
-• Kit 100 Mini Brownies - R$ 160,00 (25% OFF)
-• Kit 50 Mini Brownies - R$ 80,00 (25% OFF)
-
-INFORMAÇÕES IMPORTANTES:
-• Formas de Pagamento: PIX e Dinheiro
-• Endereço de Retirada: Rua Raimundo Lemos Dias, 68
-• Site para Encomendas: https://lojams.rf.gd (com informações completas e fotos)
-• Produtos marcados como INDISPONÍVEL estão sem estoque no momento
-
-Orientação: Sempre informe o preço e disponibilidade quando mencionar produtos. Para itens sem estoque, sugira alternativas similares. Direcione o cliente ao site para ver fotos e fazer pedidos. Mantenha as respostas claras e objetivas.`;
+// Verificação de segurança
+if (!process.env.GITHUB_TOKEN) {
+  console.warn('⚠️  GITHUB_TOKEN não configurado - usando apenas fallback');
 }
 
-// Função para obter resposta da IA
-async function getAIResponse(userMessage) {
+// ... (o resto do código permanece igual ao anterior)
+function getSystemMessage() {
+  return `Você é um atendente virtual da loja "Mercado dos Sabores". Seja simpático, prestativo e sempre informe preços e disponibilidade.
+
+CATÁLOGO DA LOJA:
+
+🍫 BROWNIES (R$ 4,00 cada):
+• Brownie Ferrero ✅
+• Brownie Beijinho ❌ (INDISPONÍVEL)
+• Brownie Doce de Leite ✅
+• Brownie Ninho ✅
+• Brownie Paçoca ✅
+• Brownie Pistache ✅
+• Brownie de Brigadeiro ✅
+
+🍨 DINDINS GOURMET:
+• Dindin Oreo - R$ 5,50 ✅
+• Dindin Ninho com Avelã - R$ 6,00 ✅
+• Dindin Ninho com Geleia de Morango - R$ 6,00 ✅
+• Dindin Paçoca - R$ 5,50 ✅
+• Dindin Browninho - R$ 5,50 ✅
+
+🎂 BOLOS NO POTE:
+• Bolo de Pote Ferrero - R$ 12,00 ✅
+• Bolo de Pote Maracujá com Chocolate - R$ 12,00 ✅
+• Bolo de Pote Ninho com Geleia de Morango - R$ 11,00 ✅
+
+🍰 SOBREMESAS:
+• Delícia de Abacaxi - R$ 5,50 ✅
+• Pavê KitKat - R$ 6,50 ✅
+• Sensação - R$ 6,50 ✅
+• Torta Cookie - R$ 6,50 ✅
+• Torta de Limão - R$ 5,00 ✅
+
+📍 INFORMAÇÕES IMPORTANTES:
+• Endereço: Rua Raimundo Lemos Dias, 68
+• Pagamento: PIX e Dinheiro
+• Site: https://lojams.rf.gd
+
+Orientações: Seja claro sobre preços e disponibilidade. Para produtos indisponíveis, sugira alternativas. Mantenha respostas úteis e diretas.`;
+}
+
+// Sistema de fallback (mantido igual)
+class FallbackSystem {
+  generateResponse(message) {
+    const lowerMsg = message.toLowerCase();
+    
+    if (lowerMsg.includes('oi') || lowerMsg.includes('olá')) {
+      return "Olá! Bem-vindo ao Mercado dos Sabores! 🎉\nComo posso ajudar você hoje?";
+    } else if (lowerMsg.includes('cardápio') || lowerMsg.includes('menu')) {
+      return this.getMenu();
+    } else if (lowerMsg.includes('preço') || lowerMsg.includes('quanto')) {
+      return this.getPriceInfo(lowerMsg);
+    } else if (lowerMsg.includes('endereço') || lowerMsg.includes('onde')) {
+      return "📍 *Endereço de Retirada:* Rua Raimundo Lemos Dias, 68\n\nVocê pode retirar seu pedido aqui!";
+    } else if (lowerMsg.includes('pagamento') || lowerMsg.includes('pix')) {
+      return "💳 *Formas de Pagamento:*\n• PIX\n• Dinheiro\n\nAceitamos estas duas formas de pagamento!";
+    } else if (lowerMsg.includes('site') || lowerMsg.includes('online')) {
+      return "🌐 *Site para Encomendas:*\nhttps://lojams.rf.gd\n\nNo site você encontra fotos e pode fazer pedidos online!";
+    } else {
+      return this.getProductResponse(lowerMsg);
+    }
+  }
+
+  getMenu() {
+    return `📋 *CARDÁPIO MERCADO DOS SABORES*
+
+🍫 BROWNIES (R$ 4,00):
+• Ferrero, Doce de Leite, Ninho, Paçoca, Pistache, Brigadeiro
+
+🍨 DINDINS (R$ 5,50-6,00):
+• Oreo, Ninho com Avelã, Ninho com Morango, Paçoca, Browninho
+
+🎂 BOLOS NO POTE (R$ 11,00-12,00):
+• Ferrero, Maracujá com Chocolate, Ninho com Morango
+
+🍰 SOBREMESAS (R$ 5,00-6,50):
+• Delícia de Abacaxi, Pavê KitKat, Sensação, Torta Cookie, Torta de Limão
+
+💻 *Site completo:* https://lojams.rf.gd`;
+  }
+
+  getPriceInfo(message) {
+    if (message.includes('brownie')) {
+      return "🍫 *Brownies:* R$ 4,00 cada\nTemos: Ferrero, Doce de Leite, Ninho, Paçoca, Pistache e Brigadeiro!";
+    } else if (message.includes('dindin')) {
+      return "🍨 *Dindins:* R$ 5,50 a R$ 6,00\nOreo: R$ 5,50 | Ninho com Avelã/Morango: R$ 6,00 | Paçoca/Browninho: R$ 5,50";
+    } else if (message.includes('bolo') || message.includes('pote')) {
+      return "🎂 *Bolos no Pote:* R$ 11,00 a R$ 12,00\nNinho com Morango: R$ 11,00 | Ferrero/Maracujá: R$ 12,00";
+    } else {
+      return "💰 *Nossos Preços:*\n• Brownies: R$ 4,00\n• Dindins: R$ 5,50-6,00\n• Bolos no Pote: R$ 11,00-12,00\n• Sobremesas: R$ 5,00-6,50\n\nPergunte sobre um produto específico!";
+    }
+  }
+
+  getProductResponse(message) {
+    const products = {
+      'ferrero': "🍫 *Brownie Ferrero:* R$ 4,00 - Brownie intenso com recheio de brigadeiro 50% cacau (DISPONÍVEL)",
+      'ninho': "🍫 *Brownie Ninho:* R$ 4,00 - Brownie molhadinho com recheio cremoso de leite Ninho (DISPONÍVEL)",
+      'paçoca': "🍫 *Brownie Paçoca:* R$ 4,00 - Brownie molhadinho com recheio cremoso de paçoca (DISPONÍVEL)",
+      'oreo': "🍨 *Dindin Oreo:* R$ 5,50 - Delicioso dindin sabor Oreo (DISPONÍVEL)",
+      'avelã': "🍨 *Dindin Ninho com Avelã:* R$ 6,00 - Combinação incrível de ninho com avelã (DISPONÍVEL)",
+      'maracujá': "🎂 *Bolo de Pote Maracujá com Chocolate:* R$ 12,00 - Sabor refrescante de maracujá (DISPONÍVEL)"
+    };
+
+    for (const [product, response] of Object.entries(products)) {
+      if (message.includes(product)) {
+        return response + "\n\n🌐 *Site:* https://lojams.rf.gd";
+      }
+    }
+
+    return "Olá! Sou da Loja Mercado dos Sabores 🍫\nPosso ajudar com:\n• Cardápio completo\n• Preços\n• Endereço\n• Formas de pagamento\n\nO que você gostaria de saber?";
+  }
+}
+
+const fallbackSystem = new FallbackSystem();
+
+// Função para obter resposta da IA do GitHub
+async function getGitHubAIResponse(userMessage) {
+  // Verifica se o token está configurado via variável de ambiente
+  if (!GITHUB_API_CONFIG.apiKey) {
+    console.log("⚠️ Usando fallback - GITHUB_TOKEN não configurado");
+    return fallbackSystem.generateResponse(userMessage);
+  }
+
   try {
-    const response = await fetch(`${GITHUB_API_CONFIG.endpoint}/openai/deployments/${GITHUB_API_CONFIG.model}/chat/completions?api-version=2024-02-01`, {
+    console.log("🔄 Chamando GitHub AI...");
+    
+    const response = await fetch(`${GITHUB_API_CONFIG.endpoint}/openai/deployments/${GITHUB_API_CONFIG.model}/chat/completions?api-version=2023-12-01-preview`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GITHUB_API_CONFIG.apiKey}`
+        'Authorization': `Bearer ${GITHUB_API_CONFIG.apiKey}`,
+        'api-key': GITHUB_API_CONFIG.apiKey
       },
       body: JSON.stringify({
         messages: [
@@ -108,131 +168,85 @@ async function getAIResponse(userMessage) {
         ],
         max_tokens: 500,
         temperature: 0.7,
-        top_p: 0.95,
-        frequency_penalty: 0,
-        presence_penalty: 0,
-        stop: null,
-        stream: false
+        top_p: 0.95
       })
     });
 
     if (!response.ok) {
-      throw new Error(`Erro na API: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`GitHub API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
     
-    if (data.choices && data.choices.length > 0) {
+    if (data.choices && data.choices[0].message) {
+      console.log("✅ Resposta da IA recebida");
       return data.choices[0].message.content;
     } else {
-      throw new Error('Resposta vazia da API');
+      throw new Error('Resposta inválida da API');
     }
-  } catch (error) {
-    console.error('Erro ao chamar API do GitHub:', error);
-    
-    // Respostas de fallback para erros
-    const fallbackResponses = {
-      'oi': 'Olá! Bem-vindo ao Mercado dos Sabores! 🎉 Como posso ajudar você hoje?',
-      'cardápio': 'Confira nosso cardápio completo no site: https://lojams.rf.gd 📱',
-      'preço': 'Temos preços acessíveis! Brownies a R$ 4,00 e Dindins a partir de R$ 5,50. 😊',
-      'default': 'Olá! No momento estou com instabilidade técnica. Por favor, visite nosso site: https://lojams.rf.gd ou entre em contato diretamente. Obrigada! 🙏'
-    };
 
-    const lowerMessage = userMessage.toLowerCase();
-    if (lowerMessage.includes('oi') || lowerMessage.includes('olá')) {
-      return fallbackResponses.oi;
-    } else if (lowerMessage.includes('cardápio') || lowerMessage.includes('menu')) {
-      return fallbackResponses.cardápio;
-    } else if (lowerMessage.includes('preço') || lowerMessage.includes('quanto')) {
-      return fallbackResponses.preço;
-    } else {
-      return fallbackResponses.default;
-    }
+  } catch (error) {
+    console.error('❌ Erro GitHub AI:', error.message);
+    return fallbackSystem.generateResponse(userMessage);
   }
 }
 
 // Rota principal
 app.get('/', (req, res) => {
+  const tokenStatus = process.env.GITHUB_TOKEN ? 'Configurado ✅' : 'Não configurado ⚠️';
+  
   res.json({ 
     message: 'API do Mercado dos Sabores funcionando!',
     status: 'online',
-    features: 'IA integrada com GitHub Models'
+    mode: 'GitHub AI + Fallback Inteligente',
+    token_status: tokenStatus,
+    security: 'API Key protegida por variável de ambiente'
   });
 });
 
-// Rota de saúde da API
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    service: 'Mercado dos Sabores Bot API'
-  });
-});
-
-// Rota do webhook (POST) - Principal para o AutoReply
+// Rota do webhook principal para AutoReply
 app.post('/webhook', async (req, res) => {
-  console.log('Mensagem recebida:', req.body);
+  console.log('📩 Mensagem recebida:', req.body);
   
-  const { senderMessage, senderName, isMessageFromGroup, groupName } = req.body;
+  const { senderMessage, senderName, isMessageFromGroup } = req.body;
   
-  // Evitar responder em grupos se não quiser
+  // Não responder em grupos
   if (isMessageFromGroup) {
-    return res.json({
-      data: [{ message: "" }] // Resposta vazia para grupos
-    });
+    return res.json({ data: [{ message: "" }] });
   }
   
   try {
-    // Obter resposta da IA
-    const resposta = await getAIResponse(senderMessage);
+    const resposta = await getGitHubAIResponse(senderMessage);
+    console.log(`💬 Resposta para ${senderName}: ${resposta.substring(0, 100)}...`);
     
-    console.log(`Resposta para ${senderName}: ${resposta}`);
-    
-    const response = {
+    res.json({
       data: [{ message: resposta }]
-    };
-    
-    res.json(response);
+    });
   } catch (error) {
     console.error('Erro no webhook:', error);
-    
-    // Resposta de erro genérica
-    const errorResponse = {
-      data: [{ 
-        message: "Olá! No momento estou com dificuldades técnicas. Por favor, visite nosso site: https://lojams.rf.gd ou tente novamente em alguns instantes. Obrigada! 😊" 
-      }]
-    };
-    
-    res.json(errorResponse);
+    const fallback = fallbackSystem.generateResponse(senderMessage);
+    res.json({ data: [{ message: fallback }] });
   }
 });
 
-// Rota de teste da IA
-app.post('/test-ai', async (req, res) => {
-  const { message } = req.body;
-  
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
-  }
-  
-  try {
-    const aiResponse = await getAIResponse(message);
-    res.json({
-      original_message: message,
-      ai_response: aiResponse,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Erro ao processar mensagem',
-      details: error.message 
-    });
-  }
+// Rota de status (sem informações sensíveis)
+app.get('/status', (req, res) => {
+  res.json({
+    status: 'online',
+    service: 'Mercado dos Sabores Bot',
+    ai_configured: !!process.env.GITHUB_TOKEN,
+    fallback_system: 'active',
+    security: 'environment_variables',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor do Mercado dos Sabores rodando na porta ${PORT}`);
-  console.log(`📞 Webhook disponível em: http://localhost:${PORT}/webhook`);
-  console.log(`🤖 IA integrada com GitHub Models`);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`🔗 Webhook: http://localhost:${PORT}/webhook`);
+  console.log(`🤖 GitHub AI: ${process.env.GITHUB_TOKEN ? 'CONFIGURADO ✅' : 'NÃO CONFIGURADO ⚠️'}`);
+  console.log(`🛡️  Fallback: ATIVO`);
+  console.log(`🔒 Segurança: Variáveis de ambiente`);
 });
