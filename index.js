@@ -10,39 +10,44 @@ const token = process.env.GITHUB_TOKEN;
 const endpoint = "https://models.github.ai/inference";
 const model = "openai/gpt-4.1";
 
-// Configurações do MySQL - Railway
-// Railway fornece DATABASE_URL no formato: mysql://user:password@host:port/database
-let dbConfig;
+// String de conexão direta do Railway
+const MYSQL_CONNECTION_STRING = "mysql://root:ZefFlJwoGgbGclwcSyOeZuvMGVqmhvtH@trolley.proxy.rlwy.net:52398/railway";
 
-if (process.env.DATABASE_URL) {
-  // Parse da DATABASE_URL do Railway
-  const url = new URL(process.env.DATABASE_URL);
-  dbConfig = {
-    host: url.hostname,
-    port: url.port || 3306,
-    user: url.username,
-    password: url.password,
-    database: url.pathname.replace('/', ''),
-    // Configurações otimizadas para Railway
-    connectTimeout: 10000,
-    acquireTimeout: 10000,
-    timeout: 10000,
-    charset: 'utf8mb4'
-  };
-} else {
-  // Fallback para variáveis individuais
-  dbConfig = {
-    host: process.env.MYSQLHOST || process.env.MYSQL_HOST,
-    port: process.env.MYSQLPORT || process.env.MYSQL_PORT || 3306,
-    user: process.env.MYSQLUSER || process.env.MYSQL_USER,
-    password: process.env.MYSQLPASSWORD || process.env.MYSQL_PASSWORD,
-    database: process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE,
-    connectTimeout: 10000,
-    acquireTimeout: 10000,
-    timeout: 10000,
-    charset: 'utf8mb4'
-  };
+// Parse da string de conexão
+function parseMySQLString(connectionString) {
+  try {
+    const matches = connectionString.match(/mysql:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/);
+    if (matches) {
+      return {
+        host: matches[3],
+        port: parseInt(matches[4]),
+        user: matches[1],
+        password: matches[2],
+        database: matches[5],
+        connectTimeout: 10000,
+        acquireTimeout: 10000,
+        timeout: 10000,
+        charset: 'utf8mb4'
+      };
+    }
+  } catch (error) {
+    console.error('❌ Erro ao parsear string MySQL:', error);
+  }
+  return null;
 }
+
+// Configurações do MySQL
+const dbConfig = parseMySQLString(MYSQL_CONNECTION_STRING) || {
+  host: process.env.MYSQLHOST,
+  port: process.env.MYSQLPORT || 3306,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
+  database: process.env.MYSQLDATABASE,
+  connectTimeout: 10000,
+  acquireTimeout: 10000,
+  timeout: 10000,
+  charset: 'utf8mb4'
+};
 
 // Verifica se as variáveis necessárias estão disponíveis
 if (!token) {
@@ -65,6 +70,7 @@ async function testMySQLConnection() {
   console.log(`   Host: ${dbConfig.host}`);
   console.log(`   Database: ${dbConfig.database}`);
   console.log(`   User: ${dbConfig.user}`);
+  console.log(`   Port: ${dbConfig.port}`);
   
   try {
     const testConnection = await mysql.createConnection(dbConfig);
@@ -74,6 +80,7 @@ async function testMySQLConnection() {
     return true;
   } catch (error) {
     console.error('❌ Teste de conexão MySQL falhou:', error.message);
+    console.error('📋 Código do erro:', error.code);
     return false;
   }
 }
@@ -83,8 +90,11 @@ async function initializeDatabase() {
   
   // Verifica se as configurações estão definidas
   if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
-    console.log('🚫 Configurações do MySQL não encontradas');
-    console.log('   Railway deve fornecer DATABASE_URL ou variáveis MYSQL_*');
+    console.log('🚫 Configurações do MySQL incompletas:');
+    console.log(`   Host: ${dbConfig.host}`);
+    console.log(`   User: ${dbConfig.user}`);
+    console.log(`   Database: ${dbConfig.database}`);
+    console.log(`   Password: ${dbConfig.password ? '***' : 'AUSENTE'}`);
     mysqlEnabled = false;
     return;
   }
@@ -101,7 +111,7 @@ async function initializeDatabase() {
     pool = mysql.createPool({
       ...dbConfig,
       waitForConnections: true,
-      connectionLimit: 10, // Railway permite boas conexões
+      connectionLimit: 10,
       queueLimit: 0,
       acquireTimeout: 10000,
       timeout: 10000,
@@ -159,7 +169,7 @@ async function initializeDatabase() {
     
   } catch (error) {
     console.error('❌ Erro na inicialização do MySQL:', error.message);
-    console.error('📋 Detalhes do erro:', error.code);
+    console.error('📋 Código do erro:', error.code);
     mysqlEnabled = false;
     
     if (pool) {
@@ -257,7 +267,6 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   try {
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     
-    // Método compatível com MySQL do Railway
     await pool.execute(
       `DELETE FROM conversations 
        WHERE session_id = ? AND id NOT IN (
@@ -390,18 +399,14 @@ app.get('/conversations', async (req, res) => {
 });
 
 // Rota para status do banco
-app.get('/railway-db', async (req, res) => {
+app.get('/db-status', async (req, res) => {
   try {
     if (!mysqlEnabled || !pool) {
       return res.json({
         status: 'disabled',
         message: 'MySQL não está habilitado',
         mysqlEnabled: mysqlEnabled,
-        config: {
-          hasDatabaseUrl: !!process.env.DATABASE_URL,
-          host: dbConfig.host,
-          database: dbConfig.database
-        }
+        poolExists: !!pool
       });
     }
 
@@ -411,27 +416,35 @@ app.get('/railway-db', async (req, res) => {
     // Contagem de conversas
     const [countResult] = await pool.execute('SELECT COUNT(*) as total FROM conversations');
     
-    // Informações do banco
-    const [dbInfo] = await pool.execute('SELECT DATABASE() as db, NOW() as server_time');
+    // Últimas conversas
+    const [recentConversations] = await pool.execute(
+      'SELECT id, sender_name, created_at FROM conversations ORDER BY id DESC LIMIT 5'
+    );
+
+    // Informações do servidor
+    const [serverInfo] = await pool.execute('SELECT VERSION() as version, NOW() as server_time');
 
     res.json({
       status: 'connected',
-      message: 'Railway MySQL está funcionando',
+      message: 'MySQL Railway está funcionando perfeitamente!',
       connectionTest: testResult[0].connection_test,
       totalConversations: countResult[0].total,
-      databaseInfo: dbInfo[0],
+      recentConversations: recentConversations,
+      serverInfo: serverInfo[0],
       config: {
         host: dbConfig.host,
         database: dbConfig.database,
-        user: dbConfig.user
+        user: dbConfig.user,
+        port: dbConfig.port
       }
     });
     
   } catch (error) {
     res.json({
       status: 'error',
-      message: 'Erro no Railway MySQL',
-      error: error.message
+      message: 'Erro no MySQL Railway',
+      error: error.message,
+      mysqlEnabled: mysqlEnabled
     });
   }
 });
@@ -442,7 +455,7 @@ app.get('/ping', (req, res) => {
     status: 'OK',
     mysql: mysqlEnabled ? 'connected' : 'disabled',
     timestamp: new Date().toISOString(),
-    service: 'Railway'
+    service: 'Railway MySQL'
   });
 });
 
@@ -486,7 +499,7 @@ app.get('/', (req, res) => {
       webhook: 'POST /webhook',
       health: 'GET /health',
       ping: 'GET /ping',
-      railway_db: 'GET /railway_db',
+      db_status: 'GET /db-status',
       conversations: 'GET /conversations (admin)'
     }
   });
@@ -494,25 +507,29 @@ app.get('/', (req, res) => {
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply no Railway...');
-  console.log('🔧 Configurações detectadas:');
-  console.log(`   - DATABASE_URL: ${process.env.DATABASE_URL ? 'PRESENTE' : 'AUSENTE'}`);
-  console.log(`   - GitHub Token: ${token ? 'PRESENTE' : 'AUSENTE'}`);
+  console.log('🚀 Iniciando servidor AutoReply com MySQL Railway...');
+  console.log('🔧 String de conexão detectada:');
+  console.log(`   Host: ${dbConfig.host}`);
+  console.log(`   Database: ${dbConfig.database}`);
+  console.log(`   User: ${dbConfig.user}`);
+  console.log(`   Port: ${dbConfig.port}`);
   
   await initializeDatabase();
   
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`🎉 Servidor rodando na porta ${PORT}`);
-    console.log(`🌐 Webhook: https://seu-app.railway.app/webhook`);
-    console.log(`🔍 Health: https://seu-app.railway.app/health`);
+    console.log(`🌐 Webhook: POST /webhook`);
+    console.log(`🔍 Health: GET /health`);
+    console.log(`📊 Status MySQL: GET /db-status`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     
-    if (!mysqlEnabled) {
-      console.log('\n📝 Para conectar MySQL no Railway:');
-      console.log('   1. No painel do Railway, adicione "MySQL" como plugin');
-      console.log('   2. O Railway automaticamente fornece DATABASE_URL');
-      console.log('   3. Reinicie o serviço após adicionar o MySQL');
+    if (mysqlEnabled) {
+      console.log('\n🎯 PRONTO! Agora sua IA tem:');
+      console.log('   ✅ Histórico de conversas');
+      console.log('   ✅ Contexto por usuário/grupo');
+      console.log('   ✅ Respostas mais inteligentes');
+      console.log('\n💬 Teste enviando uma mensagem pelo AutoReply!');
     }
   });
 }
