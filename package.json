@@ -1,14 +1,15 @@
 {
   "name": "autoreply-webhook",
   "version": "1.0.0",
-  "description": "Webhook server for AutoReply integration",
+  "description": "Webhook server for AutoReply integration with MySQL context",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "openai": "^4.20.1"
+    "openai": "^4.20.1",
+    "mysql2": "^3.6.0"
   },
   "engines": {
     "node": ">=18.0.0"
