@@ -1,7 +1,7 @@
 {
-  "name": "teste-ia-api",
+  "name": "ia-professora-calculo",
   "version": "1.0.0",
-  "description": "API para testar IA do GitHub",
+  "description": "IA Professora de Cálculo usando GitHub Models",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,6 +9,6 @@
   "dependencies": {
     "express": "^4.18.0",
     "cors": "^2.8.5",
-    "node-fetch": "^2.6.7"
+    "openai": "^4.20.0"
   }
 }
