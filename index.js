@@ -5,10 +5,19 @@ const mysql = require('mysql2/promise');
 const app = express();
 app.use(express.json());
 
-// Configurações da API
-const token = process.env.GITHUB_TOKEN;
+// Configurações das APIs - múltiplas chaves
+const API_KEYS = [
+  process.env.GITHUB_TOKEN_1,  // Sua primeira chave
+  process.env.GITHUB_TOKEN_2,  // Sua segunda chave
+  // Adicione mais chaves conforme necessário
+].filter(Boolean); // Remove chaves vazias
+
 const endpoint = "https://models.github.ai/inference";
 const model = "openai/gpt-4.1";
+
+// Sistema de rotacionamento de APIs
+let currentApiIndex = 0;
+let rateLimitStats = {};
 
 // String de conexão direta do Railway
 const MYSQL_CONNECTION_STRING = "mysql://root:ZefFlJwoGgbGclwcSyOeZuvMGVqmhvtH@trolley.proxy.rlwy.net:52398/railway";
@@ -49,16 +58,95 @@ const dbConfig = parseMySQLString(MYSQL_CONNECTION_STRING) || {
   charset: 'utf8mb4'
 };
 
-// Verifica se as variáveis necessárias estão disponíveis
-if (!token) {
-  console.error("ERRO: GITHUB_TOKEN não encontrado nas variáveis de ambiente");
+// Verifica se há pelo menos uma chave API disponível
+if (API_KEYS.length === 0) {
+  console.error("ERRO: Nenhuma GITHUB_TOKEN encontrada nas variáveis de ambiente");
+  console.error("Configure GITHUB_TOKEN_1, GITHUB_TOKEN_2, etc.");
   process.exit(1);
 }
 
-const client = new OpenAI({
-  baseURL: endpoint,
-  apiKey: token
-});
+console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
+
+// Função para obter o cliente atual
+function getCurrentClient() {
+  const token = API_KEYS[currentApiIndex];
+  return new OpenAI({
+    baseURL: endpoint,
+    apiKey: token
+  });
+}
+
+// Função para rotacionar para a próxima API
+function rotateToNextApi() {
+  const oldIndex = currentApiIndex;
+  currentApiIndex = (currentApiIndex + 1) % API_KEYS.length;
+  
+  // Registrar o rate limit na API antiga
+  if (!rateLimitStats[oldIndex]) {
+    rateLimitStats[oldIndex] = { rateLimitedAt: new Date() };
+  } else {
+    rateLimitStats[oldIndex].rateLimitedAt = new Date();
+  }
+  
+  console.log(`🔄 Rotacionando API: ${oldIndex} → ${currentApiIndex}`);
+  console.log(`📊 Estatísticas: ${Object.keys(rateLimitStats).length} APIs com rate limit`);
+  
+  return getCurrentClient();
+}
+
+// Função para fazer chamada à API com tratamento de rate limit
+async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
+  let lastError;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const client = getCurrentClient();
+    const currentTokenIndex = currentApiIndex;
+    
+    try {
+      console.log(`🤖 Tentando API ${currentTokenIndex} (tentativa ${attempt + 1}/${maxRetries})`);
+      
+      const response = await client.chat.completions.create({
+        messages: messages,
+        temperature: 0.7,
+        top_p: 1.0,
+        model: model
+      });
+      
+      console.log(`✅ Sucesso com API ${currentTokenIndex}`);
+      return response;
+      
+    } catch (error) {
+      lastError = error;
+      
+      // Verificar se é rate limit
+      if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
+        console.log(`⏰ Rate limit na API ${currentTokenIndex}: ${error.message}`);
+        
+        // Rotacionar para próxima API
+        rotateToNextApi();
+        
+        // Se ainda temos tentativas, continuar
+        if (attempt < maxRetries - 1) {
+          console.log(`🔄 Tentando próxima API...`);
+          continue;
+        }
+      } else {
+        // Outro tipo de erro
+        console.error(`❌ Erro na API ${currentTokenIndex}:`, error.message);
+        
+        // Para erros não relacionados a rate limit, podemos tentar outra API
+        if (attempt < maxRetries - 1) {
+          console.log(`🔄 Tentando próxima API devido a erro...`);
+          rotateToNextApi();
+          continue;
+        }
+      }
+    }
+  }
+  
+  // Se chegou aqui, todas as APIs falharam
+  throw lastError || new Error('Todas as APIs falharam');
+}
 
 // Pool de conexões MySQL
 let pool;
@@ -230,7 +318,7 @@ async function saveConversation(conversationData) {
   }
 }
 
-// Função para buscar histórico de conversas (CORRIGIDA - sem LIMIT com parâmetro)
+// Função para buscar histórico de conversas
 async function getConversationHistory(senderName, groupName, isMessageFromGroup, limit = 6) {
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, sem histórico');
@@ -263,7 +351,7 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
   }
 }
 
-// Função para limpar histórico antigo (CORRIGIDA)
+// Função para limpar histórico antigo
 async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   if (!mysqlEnabled || !pool) return;
 
@@ -310,6 +398,7 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`📩 Mensagem de ${senderName}${groupName ? ` no grupo ${groupName}` : ''}: ${senderMessage}`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? 'HABILITADO' : 'DESABILITADO'}`);
+    console.log(`🔑 API atual: ${currentApiIndex}`);
 
     // Busca histórico recente da conversa
     const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
@@ -318,72 +407,8 @@ app.post('/webhook', async (req, res) => {
     const messages = [
       {
         role: "system",
-        content: `Você é um assistente virtual da Loja 'Mercado dos Sabores'. Seja prestativo, educado e claro nas respostas.
-
-CATÁLOGO COMPLETO DE PRODUTOS:
-
-BROWNIES (R$ 4,00 cada):
-• Brownie Ferrero - Brownie intenso com recheio de brigadeiro 50% cacau
-• Brownie Beijinho - Brownie macio com recheio cremoso de coco (INDISPONÍVEL)
-• Brownie Doce de Leite - Brownie macio com recheio cremoso de doce de leite
-• Brownie Ninho - Brownie molhadinho com recheio cremoso de leite Ninho
-• Brownie Paçoca - Brownie molhadinho com recheio cremoso de paçoca
-• Brownie Pistache - Brownie com casquinha crocante, interior molhadinho
-• Brownie de Brigadeiro - Brownie com casquinha crocante, interior molhadinho
-
-DINDINS GOURMET:
-• Dindin Oreo - R$ 5,50
-• Dindin Ninho com Avelã - R$ 6,00
-• Dindin Ninho com Geleia de Morango - R$ 6,00
-• Dindin Paçoca - R$ 5,50
-• Dindin Browninho - R$ 5,50
-
-BOLOS NO POTE:
-• Bolo de Pote Cenoura com Chocolate - R$ 10,00 (INDISPONÍVEL)
-• Bolo de Pote Coco com Abacaxi - R$ 10,50 (INDISPONÍVEL)
-• Bolo de Pote Ferrero - R$ 12,00
-• Bolo de Pote Maracujá com Chocolate - R$ 12,00
-• Bolo de Pote Ninho com Geleia de Morango - R$ 11,00
-• Bolo de Pote Prestígio - R$ 10,00 (INDISPONÍVEL)
-
-BOLOS INTEIROS (SOB ENCOMENDA):
-• Bolo de Chocolate (500g) - R$ 27,00
-• Bolo Indiano - R$ 6,00 (INDISPONÍVEL)
-
-SOBREMESAS:
-• Delícia de Abacaxi - R$ 5,50
-• Pavê KitKat - R$ 6,50
-• Pudim - R$ 3,50 (INDISPONÍVEL)
-• Sensação - R$ 6,50
-• Torta Cookie - R$ 6,50
-• Torta de Limão - R$ 5,00
-
-EMPADAS:
-• Empada Camarão - R$ 6,00
-• Empada Carne do Sol - R$ 5,50 (INDISPONÍVEL)
-• Empada Frango - R$ 4,00
-
-SALGADOS:
-• Coxinha - R$ 5,00
-• Salgado Frito Carne com Queijo - R$ 5,50
-• Salgado Frito Misto - R$ 4,70
-• Salgado Salsicha - R$ 4,00
-
-KITS PARA FESTAS (SOB ENCOMENDA):
-• Kit 100 Docinhos - R$ 120,00 (25% OFF)
-• Kit 50 Docinhos - R$ 60,00 (25% OFF)
-• Kit 100 Salgados - R$ 65,00
-• Kit 50 Salgados - R$ 32,50
-• Kit 100 Mini Brownies - R$ 160,00 (25% OFF)
-• Kit 50 Mini Brownies - R$ 80,00 (25% OFF)
-
-INFORMAÇÕES IMPORTANTES:
-• Formas de Pagamento: PIX e Dinheiro
-• Endereço de Retirada: Rua Raimundo Lemos Dias, 68
-• Site para Encomendas: https://lojams.rf.gd 
-• Produtos marcados como INDISPONÍVEL estão sem estoque no momento
-
-Orientação: Sempre informe o preço e disponibilidade quando mencionar produtos. Para itens sem estoque, sugira alternativas similares. Direcione o cliente ao site para ver fotos e fazer pedidos.
+        content: `Você é um assistente útil e amigável. Responda de forma natural, concisa e em português.
+        Mantenha o contexto da conversa anterior. Seja breve mas prestativo.
         ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
         ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
       }
@@ -400,13 +425,8 @@ Orientação: Sempre informe o preço e disponibilidade quando mencionar produto
 
     console.log(`🤖 Processando com ${messages.length} mensagens de contexto (${history.length} do histórico)`);
 
-    // Processa a mensagem com a IA
-    const response = await client.chat.completions.create({
-      messages: messages,
-      temperature: 0.7,
-      top_p: 1.0,
-      model: model
-    });
+    // Processa a mensagem com a IA (com fallback para múltiplas APIs)
+    const response = await callAIWithFallback(messages);
 
     const aiResponse = response.choices[0].message.content;
 
@@ -437,9 +457,16 @@ Orientação: Sempre informe o preço e disponibilidade quando mencionar produto
   } catch (error) {
     console.error('❌ Erro ao processar mensagem:', error);
     
+    // Mensagem de erro mais específica
+    let errorMessage = "Desculpe, estou tendo problemas técnicos. Tente novamente!";
+    
+    if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
+      errorMessage = "Desculpe, atingi meu limite de uso por hoje. Por favor, tente novamente amanhã!";
+    }
+    
     res.json({
       data: [{
-        message: "Desculpe, estou tendo problemas técnicos. Tente novamente!"
+        message: errorMessage
       }]
     });
   }
@@ -472,100 +499,58 @@ app.get('/conversations', async (req, res) => {
   }
 });
 
-// Rota para status do banco
-app.get('/db-status', async (req, res) => {
+// Rota para status do banco e APIs
+app.get('/status', async (req, res) => {
   try {
-    if (!mysqlEnabled || !pool) {
-      return res.json({
-        status: 'disabled',
-        message: 'MySQL não está habilitado',
-        mysqlEnabled: mysqlEnabled,
-        poolExists: !!pool
-      });
+    let dbStatus = 'disabled';
+    if (mysqlEnabled && pool) {
+      try {
+        await pool.execute('SELECT 1');
+        dbStatus = 'connected';
+      } catch (error) {
+        dbStatus = 'error';
+      }
     }
 
-    // Teste de conexão
-    const [testResult] = await pool.execute('SELECT 1 as connection_test');
-    
-    // Contagem de conversas
-    const [countResult] = await pool.execute('SELECT COUNT(*) as total FROM conversations');
-    
-    // Últimas conversas
-    const [recentConversations] = await pool.execute(
-      'SELECT id, sender_name, created_at FROM conversations ORDER BY id DESC LIMIT 5'
-    );
+    // Estatísticas das APIs
+    const apiStats = API_KEYS.map((_, index) => ({
+      index,
+      isCurrent: index === currentApiIndex,
+      rateLimited: rateLimitStats[index] ? true : false,
+      rateLimitedAt: rateLimitStats[index]?.rateLimitedAt || null
+    }));
 
-    res.json({
-      status: 'connected',
-      message: 'MySQL Railway está funcionando perfeitamente!',
-      connectionTest: testResult[0].connection_test,
-      totalConversations: countResult[0].total,
-      recentConversations: recentConversations,
-      config: {
-        host: dbConfig.host,
-        database: dbConfig.database,
-        user: dbConfig.user,
-        port: dbConfig.port
-      }
+    res.json({ 
+      status: 'OK', 
+      database: dbStatus,
+      mysqlEnabled: mysqlEnabled,
+      apis: {
+        total: API_KEYS.length,
+        current: currentApiIndex,
+        statistics: apiStats
+      },
+      timestamp: new Date().toISOString(),
+      uptime: Math.floor(process.uptime()) + ' segundos'
     });
-    
   } catch (error) {
-    res.json({
-      status: 'error',
-      message: 'Erro no MySQL Railway',
-      error: error.message,
-      mysqlEnabled: mysqlEnabled
+    res.status(500).json({ 
+      status: 'Error', 
+      message: 'Service unhealthy'
     });
   }
 });
 
-// Rota para testar a query problemática
-app.get('/test-limit-query', async (req, res) => {
-  try {
-    if (!mysqlEnabled || !pool) {
-      return res.json({ error: 'MySQL não disponível' });
-    }
-
-    const testResults = {};
-    
-    // Teste 1: Query com LIMIT como string template (deve funcionar)
-    const [test1] = await pool.execute(
-      `SELECT sender_message, ai_response, created_at 
-       FROM conversations 
-       WHERE session_id = ? 
-       ORDER BY created_at DESC 
-       LIMIT 5`,  // LIMIT fixo
-      ['test_user']
-    );
-    testResults.limit_fixed = test1;
-    
-    // Teste 2: Query com LIMIT como parâmetro (pode falhar)
-    try {
-      const [test2] = await pool.execute(
-        `SELECT sender_message, ai_response, created_at 
-         FROM conversations 
-         WHERE session_id = ? 
-         ORDER BY created_at DESC 
-         LIMIT ?`,
-        ['test_user', 5]
-      );
-      testResults.limit_parameter = { success: true, data: test2 };
-    } catch (error) {
-      testResults.limit_parameter = { success: false, error: error.message };
-    }
-    
-    res.json({
-      status: 'success',
-      tests: testResults
-    });
-    
-  } catch (error) {
-    res.json({
-      status: 'error',
-      message: 'Erro nos testes de LIMIT',
-      error: error.message
-    });
-  }
+// Rota para forçar rotação de API
+app.post('/rotate-api', (req, res) => {
+  const oldIndex = currentApiIndex;
+  rotateToNextApi();
+  
+  res.json({
+    message: 'API rotacionada',
+    from: oldIndex,
+    to: currentApiIndex,
+    total_apis: API_KEYS.length
+  });
 });
 
 // Rota específica para uptime monitoring
@@ -573,8 +558,12 @@ app.get('/ping', (req, res) => {
   res.status(200).json({
     status: 'OK',
     mysql: mysqlEnabled ? 'connected' : 'disabled',
+    apis: {
+      total: API_KEYS.length,
+      current: currentApiIndex
+    },
     timestamp: new Date().toISOString(),
-    service: 'Railway MySQL'
+    service: 'Railway MySQL + Multi-API'
   });
 });
 
@@ -595,9 +584,12 @@ app.get('/health', async (req, res) => {
       status: 'OK', 
       database: dbStatus,
       mysqlEnabled: mysqlEnabled,
+      apis: {
+        total: API_KEYS.length,
+        current: currentApiIndex
+      },
       timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()) + ' segundos',
-      service: 'Railway MySQL'
+      uptime: Math.floor(process.uptime()) + ' segundos'
     });
   } catch (error) {
     res.status(500).json({ 
@@ -610,16 +602,20 @@ app.get('/health', async (req, res) => {
 // Rota raiz
 app.get('/', (req, res) => {
   res.json({ 
-    service: 'AutoReply Webhook com Railway MySQL',
+    service: 'AutoReply Webhook com Multi-API + MySQL',
     status: 'Online',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
+    apis: {
+      total: API_KEYS.length,
+      current: currentApiIndex
+    },
     deployment: 'Railway',
     endpoints: {
       webhook: 'POST /webhook',
       health: 'GET /health',
+      status: 'GET /status',
       ping: 'GET /ping',
-      db_status: 'GET /db-status',
-      test_limit_query: 'GET /test-limit-query',
+      'rotate-api': 'POST /rotate-api',
       conversations: 'GET /conversations (admin)'
     }
   });
@@ -627,8 +623,9 @@ app.get('/', (req, res) => {
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com MySQL Railway...');
-  console.log('🔧 String de conexão detectada:');
+  console.log('🚀 Iniciando servidor AutoReply com Multi-API...');
+  console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
+  console.log('🔧 Configurações MySQL:');
   console.log(`   Host: ${dbConfig.host}`);
   console.log(`   Database: ${dbConfig.database}`);
   console.log(`   User: ${dbConfig.user}`);
@@ -641,16 +638,18 @@ async function startServer() {
     console.log(`🎉 Servidor rodando na porta ${PORT}`);
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🔍 Health: GET /health`);
-    console.log(`📊 Status MySQL: GET /db-status`);
-    console.log(`🧪 Teste de LIMIT: GET /test-limit-query`);
+    console.log(`📊 Status completo: GET /status`);
+    console.log(`🔄 Rotacionar API: POST /rotate-api`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     
+    console.log('\n🎯 SISTEMA MULTI-API CONFIGURADO:');
+    console.log(`   ✅ ${API_KEYS.length} chaves disponíveis`);
+    console.log(`   ✅ Rotacionamento automático em rate limit`);
+    console.log(`   ✅ Fallback para próxima API`);
+    console.log(`   ✅ Estatísticas de uso`);
+    
     if (mysqlEnabled) {
-      console.log('\n🎯 PRONTO! Agora sua IA tem:');
-      console.log('   ✅ Histórico de conversas');
-      console.log('   ✅ Contexto por usuário/grupo');
-      console.log('   ✅ Respostas mais inteligentes');
-      console.log('\n💬 Teste enviando uma mensagem pelo AutoReply!');
+      console.log('\n💬 Pronto para receber mensagens com histórico de contexto!');
     }
   });
 }
