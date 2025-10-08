@@ -1,6 +1,7 @@
 const express = require('express');
 const OpenAI = require('openai');
 const mysql = require('mysql2/promise');
+const dns = require('dns').promises;
 
 const app = express();
 app.use(express.json());
@@ -17,11 +18,10 @@ const dbConfig = {
   password: process.env.MYSQL_PASSWORD,
   database: process.env.MYSQL_DATABASE,
   port: process.env.MYSQL_PORT || 3306,
-  // Configurações específicas para InfinityFree
-  connectTimeout: 60000,
-  acquireTimeout: 60000,
-  timeout: 60000,
-  reconnect: true
+  // Configurações otimizadas para InfinityFree
+  connectTimeout: 15000,
+  acquireTimeout: 15000,
+  timeout: 15000,
 };
 
 // Verifica se as variáveis necessárias estão disponíveis
@@ -39,9 +39,34 @@ const client = new OpenAI({
 let pool;
 let mysqlEnabled = false;
 
+// Função para verificar DNS do host MySQL
+async function verifyMySQLHost() {
+  if (!dbConfig.host) {
+    console.error('❌ Host MySQL não configurado');
+    return false;
+  }
+
+  console.log('🔍 Verificando DNS do host MySQL...');
+  console.log(`   Host: ${dbConfig.host}`);
+  
+  try {
+    const addresses = await dns.lookup(dbConfig.host);
+    console.log(`✅ DNS resolvido: ${dbConfig.host} -> ${addresses.address}`);
+    return true;
+  } catch (dnsError) {
+    console.error('❌ ERRO DNS: Não foi possível resolver o hostname:', dbConfig.host);
+    console.error('   Detalhes:', dnsError.message);
+    console.log('\n💡 SOLUÇÕES PARA INFINITYFREE:');
+    console.log('   1. Verifique se o hostname está correto (ex: sql206.infinityfree.com)');
+    console.log('   2. O InfinityFree pode estar bloqueando conexões externas');
+    console.log('   3. Verifique se o serviço MySQL está ativo no painel InfinityFree');
+    return false;
+  }
+}
+
 // Função para testar conexão MySQL
 async function testMySQLConnection() {
-  console.log('🔍 Testando conexão MySQL...');
+  console.log('🔌 Testando conexão MySQL...');
   console.log(`   Host: ${dbConfig.host}`);
   console.log(`   Database: ${dbConfig.database}`);
   console.log(`   User: ${dbConfig.user}`);
@@ -56,14 +81,14 @@ async function testMySQLConnection() {
     console.error('❌ Teste de conexão MySQL falhou:', error.message);
     console.log('💡 Possíveis causas:');
     console.log('   - Credenciais incorretas');
-    console.log('   - Servidor MySQL não aceita conexões externas');
-    console.log('   - Firewall bloqueando conexão');
     console.log('   - Database não existe');
+    console.log('   - Usuário sem permissões');
+    console.log('   - Servidor MySQL não aceita conexões externas');
     return false;
   }
 }
 
-// Função para verificar se a tabela existe e tem estrutura correta
+// Função para verificar estrutura da tabela
 async function verifyTableStructure() {
   try {
     const [rows] = await pool.execute(`
@@ -94,12 +119,20 @@ async function verifyTableStructure() {
 }
 
 async function initializeDatabase() {
-  console.log('🔄 Inicializando MySQL...');
+  console.log('🔄 Inicializando MySQL para InfinityFree...');
   
-  // Testa conexão básica primeiro
+  // Verifica DNS primeiro
+  const dnsOK = await verifyMySQLHost();
+  if (!dnsOK) {
+    console.log('🚫 MySQL desabilitado - problema de DNS');
+    mysqlEnabled = false;
+    return;
+  }
+
+  // Testa conexão básica
   const connectionTest = await testMySQLConnection();
   if (!connectionTest) {
-    console.log('🚫 MySQL desabilitado - funcionando sem banco de dados');
+    console.log('🚫 MySQL desabilitado - não foi possível conectar');
     mysqlEnabled = false;
     return;
   }
@@ -108,18 +141,17 @@ async function initializeDatabase() {
     pool = mysql.createPool({
       ...dbConfig,
       waitForConnections: true,
-      connectionLimit: 5, // InfinityFree pode ter limite
+      connectionLimit: 3, // InfinityFree tem limite baixo
       queueLimit: 0,
-      acquireTimeout: 60000,
-      timeout: 60000,
-      reconnect: true
+      acquireTimeout: 15000,
+      timeout: 15000,
     });
 
     // Testa a conexão do pool
     const connection = await pool.getConnection();
     console.log('✅ Pool MySQL conectado com sucesso');
     
-    // Cria a tabela se não existir
+    // Cria a tabela se não existir (versão simplificada para InfinityFree)
     console.log('🔄 Verificando/Criando tabela...');
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS conversations (
@@ -132,35 +164,18 @@ async function initializeDatabase() {
         ai_response TEXT NOT NULL,
         message_datetime BIGINT,
         receive_message_app VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX session_index (session_id),
-        INDEX sender_index (sender_name)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
     console.log('✅ Tabela conversations verificada/criada');
     
-    // Verifica estrutura da tabela
-    const structureOK = await verifyTableStructure();
-    if (!structureOK) {
-      console.log('🔄 Recriando tabela com estrutura correta...');
-      await connection.execute('DROP TABLE IF EXISTS conversations');
-      await connection.execute(`
-        CREATE TABLE conversations (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          session_id VARCHAR(255) NOT NULL,
-          sender_name VARCHAR(255) NOT NULL,
-          group_name VARCHAR(255),
-          is_group_message BOOLEAN DEFAULT FALSE,
-          sender_message TEXT NOT NULL,
-          ai_response TEXT NOT NULL,
-          message_datetime BIGINT,
-          receive_message_app VARCHAR(100),
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX session_index (session_id),
-          INDEX sender_index (sender_name)
-        )
-      `);
-      console.log('✅ Tabela recriada com estrutura correta');
+    // Tenta criar índices (pode falhar no InfinityFree, mas não é crítico)
+    try {
+      await connection.execute('CREATE INDEX IF NOT EXISTS session_index ON conversations (session_id)');
+      await connection.execute('CREATE INDEX IF NOT EXISTS sender_index ON conversations (sender_name)');
+      console.log('✅ Índices criados/verificados');
+    } catch (indexError) {
+      console.log('⚠️  Índices podem já existir ou não suportados, continuando...');
     }
     
     // Testa inserção e leitura
@@ -191,10 +206,9 @@ async function initializeDatabase() {
     
   } catch (error) {
     console.error('❌ Erro na inicialização do MySQL:', error.message);
-    console.error('📋 Detalhes do erro:', error);
+    console.error('📋 Código do erro:', error.code);
     mysqlEnabled = false;
     
-    // Fecha o pool se existir
     if (pool) {
       try {
         await pool.end();
@@ -251,7 +265,7 @@ async function saveConversation(conversationData) {
     
   } catch (error) {
     console.error('❌ Erro ao salvar conversa:', error.message);
-    console.error('📋 Detalhes do erro SQL:', error);
+    console.error('📋 Código do erro:', error.code);
     return null;
   }
 }
@@ -282,6 +296,7 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
   } catch (error) {
     console.error('❌ Erro ao buscar histórico:', error.message);
+    console.error('📋 Código do erro:', error.code);
     return [];
   }
 }
@@ -293,18 +308,23 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   try {
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     
-    await pool.execute(
-      `DELETE FROM conversations 
-       WHERE session_id = ? AND id NOT IN (
-         SELECT id FROM (
-           SELECT id FROM conversations 
-           WHERE session_id = ? 
-           ORDER BY created_at DESC 
-           LIMIT 15
-         ) AS temp
-       )`,
-      [sessionId, sessionId]
+    // Método alternativo para limpeza (mais compatível)
+    const [recentMessages] = await pool.execute(
+      `SELECT id FROM conversations 
+       WHERE session_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT 15`,
+      [sessionId]
     );
+    
+    if (recentMessages.length > 0) {
+      const keepIds = recentMessages.map(msg => msg.id);
+      await pool.execute(
+        `DELETE FROM conversations 
+         WHERE session_id = ? AND id NOT IN (?)`,
+        [sessionId, keepIds]
+      );
+    }
     
     console.log(`🧹 Mensagens antigas limpas para sessão: ${sessionId}`);
   } catch (error) {
@@ -312,50 +332,75 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Rota para teste do MySQL
-app.get('/test_mysql', async (req, res) => {
+// ROTA DE DIAGNÓSTICO COMPLETO
+app.get('/debug_mysql', async (req, res) => {
+  const debugInfo = {
+    timestamp: new Date().toISOString(),
+    mysqlEnabled: mysqlEnabled,
+    poolExists: !!pool,
+    config: {
+      host: dbConfig.host,
+      database: dbConfig.database,
+      user: dbConfig.user,
+      port: dbConfig.port
+    },
+    tests: {}
+  };
+
   try {
-    if (!mysqlEnabled || !pool) {
-      return res.json({
-        status: 'error',
-        message: 'MySQL não está habilitado ou disponível',
-        mysqlEnabled: mysqlEnabled,
-        poolExists: !!pool
-      });
+    // Teste de DNS
+    try {
+      const dnsResult = await dns.lookup(dbConfig.host);
+      debugInfo.tests.dns = {
+        status: 'success',
+        address: dnsResult.address
+      };
+    } catch (dnsError) {
+      debugInfo.tests.dns = {
+        status: 'failed',
+        error: dnsError.message
+      };
     }
 
-    // Teste de conexão
-    const [testResult] = await pool.execute('SELECT 1 as connection_test');
-    
-    // Teste de contagem
-    const [countResult] = await pool.execute('SELECT COUNT(*) as total FROM conversations');
-    
-    // Últimas 5 conversas
-    const [recentConversations] = await pool.execute(
-      'SELECT id, sender_name, created_at FROM conversations ORDER BY id DESC LIMIT 5'
-    );
+    // Teste de conexão MySQL
+    if (mysqlEnabled && pool) {
+      try {
+        const [testResult] = await pool.execute('SELECT 1 as test_value');
+        debugInfo.tests.mysql_connection = {
+          status: 'success',
+          result: testResult[0]
+        };
 
-    res.json({
-      status: 'success',
-      message: 'MySQL está funcionando corretamente',
-      connectionTest: testResult[0].connection_test,
-      totalConversations: countResult[0].total,
-      recentConversations: recentConversations,
-      mysqlEnabled: mysqlEnabled,
-      config: {
-        host: dbConfig.host,
-        database: dbConfig.database,
-        user: dbConfig.user
+        // Teste de tabela
+        try {
+          const [tableResult] = await pool.execute('SELECT COUNT(*) as count FROM conversations');
+          debugInfo.tests.table = {
+            status: 'success',
+            count: tableResult[0].count
+          };
+        } catch (tableError) {
+          debugInfo.tests.table = {
+            status: 'failed',
+            error: tableError.message
+          };
+        }
+      } catch (mysqlError) {
+        debugInfo.tests.mysql_connection = {
+          status: 'failed',
+          error: mysqlError.message,
+          code: mysqlError.code
+        };
       }
-    });
-    
+    } else {
+      debugInfo.tests.mysql_connection = { status: 'skipped', reason: 'MySQL not enabled' };
+      debugInfo.tests.table = { status: 'skipped', reason: 'MySQL not enabled' };
+    }
+
+    res.json(debugInfo);
   } catch (error) {
     res.json({
-      status: 'error',
-      message: 'Erro no teste do MySQL',
-      error: error.message,
-      mysqlEnabled: mysqlEnabled,
-      poolExists: !!pool
+      ...debugInfo,
+      error: error.message
     });
   }
 });
@@ -523,7 +568,7 @@ app.get('/', (req, res) => {
       webhook: 'POST /webhook',
       health: 'GET /health',
       ping: 'GET /ping',
-      test_mysql: 'GET /test_mysql',
+      'debug_mysql': 'GET /debug_mysql',
       conversations: 'GET /conversations'
     }
   });
@@ -532,10 +577,10 @@ app.get('/', (req, res) => {
 // Inicializa o servidor
 async function startServer() {
   console.log('🚀 Iniciando servidor...');
-  console.log('🔧 Configurações:');
-  console.log(`   - GitHub Token: ${token ? 'PRESENTE' : 'AUSENTE'}`);
-  console.log(`   - MySQL Host: ${dbConfig.host || 'NÃO CONFIGURADO'}`);
-  console.log(`   - MySQL Database: ${dbConfig.database || 'NÃO CONFIGURADO'}`);
+  console.log('🔧 Configurações MySQL:');
+  console.log(`   - Host: ${dbConfig.host || 'NÃO CONFIGURADO'}`);
+  console.log(`   - Database: ${dbConfig.database || 'NÃO CONFIGURADO'}`);
+  console.log(`   - User: ${dbConfig.user || 'NÃO CONFIGURADO'}`);
   
   await initializeDatabase();
   
@@ -545,9 +590,16 @@ async function startServer() {
     console.log(`🌐 URLs importantes:`);
     console.log(`   • Webhook: http://localhost:${PORT}/webhook`);
     console.log(`   • Health: http://localhost:${PORT}/health`);
-    console.log(`   • Test MySQL: http://localhost:${PORT}/test_mysql`);
+    console.log(`   • Debug MySQL: http://localhost:${PORT}/debug_mysql`);
     console.log(`   • Ping: http://localhost:${PORT}/ping (UptimeRobot)`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ HABILITADO' : '❌ DESABILITADO'}`);
+    
+    if (!mysqlEnabled) {
+      console.log('\n🔧 PARA HABILITAR MYSQL:');
+      console.log('   1. Verifique as variáveis de ambiente no Render');
+      console.log('   2. Acesse /debug_mysql para diagnóstico detalhado');
+      console.log('   3. Confirme se o InfinityFree permite conexões externas');
+    }
   });
 }
 
