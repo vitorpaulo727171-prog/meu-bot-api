@@ -69,37 +69,19 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ... código anterior mantido ...
-
 // Rota específica para uptime monitoring (resposta mínima)
 app.get('/ping', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Rota de health check melhorada
-app.get('/health', async (req, res) => {
-  try {
-    let dbStatus = 'unknown';
-    try {
-      await pool.execute('SELECT 1');
-      dbStatus = 'connected';
-    } catch (error) {
-      dbStatus = 'disconnected';
-    }
-
-    res.status(200).json({ 
-      status: 'OK', 
-      database: dbStatus,
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime()
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'Error', 
-      message: 'Service unhealthy',
-      error: error.message 
-    });
-  }
+// Rota de health check sem MySQL
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    message: 'Servidor funcionando normalmente'
+  });
 });
 
 // Rota raiz com informações
@@ -107,7 +89,12 @@ app.get('/', (req, res) => {
   res.json({ 
     service: 'AutoReply Webhook',
     status: 'Online',
-    usage: 'POST /webhook com payload do AutoReply'
+    usage: 'POST /webhook com payload do AutoReply',
+    endpoints: {
+      webhook: 'POST /webhook',
+      health: 'GET /health',
+      ping: 'GET /ping'
+    }
   });
 });
 
@@ -115,4 +102,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`📝 Webhook URL: http://localhost:${PORT}/webhook`);
+  console.log(`🔄 Ping URL: http://localhost:${PORT}/ping (para UptimeRobot)`);
 });
