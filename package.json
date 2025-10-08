@@ -1,7 +1,7 @@
 {
-  "name": "autoreply-api",
+  "name": "teste-ia-api",
   "version": "1.0.0",
-  "description": "API para AutoReply App com memória de conversação",
+  "description": "API para testar IA do GitHub",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
