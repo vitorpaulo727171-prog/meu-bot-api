@@ -413,7 +413,7 @@ app.post('/webhook', async (req, res) => {
 INFORMAÇÕES GERAIS:
 • Endereço: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
 • Pagamento: PIX e Dinheiro
-• Site: lojams.rf.gd 
+• Site: https://lojams.rf.gd 
 • Retirada no local ou via UberFlash (custo por conta do cliente)
 
 CATÁLOGO DE PRODUTOS:
