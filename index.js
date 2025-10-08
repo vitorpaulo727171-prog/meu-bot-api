@@ -523,7 +523,7 @@ app.get('/', (req, res) => {
       webhook: 'POST /webhook',
       health: 'GET /health',
       ping: 'GET /ping',
-      test-mysql: 'GET /test_mysql',
+      test_mysql: 'GET /test_mysql',
       conversations: 'GET /conversations'
     }
   });
