@@ -1,7 +1,7 @@
 {
   "name": "autoreply-api",
-  "version": "1.0.0", 
-  "description": "API para AutoReply App com IA conversacional avançada",
+  "version": "1.0.0",
+  "description": "API para AutoReply App com memória de conversação",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
