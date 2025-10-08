@@ -313,7 +313,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
 }
 
 // Rota para teste do MySQL
-app.get('/test-mysql', async (req, res) => {
+app.get('/test_mysql', async (req, res) => {
   try {
     if (!mysqlEnabled || !pool) {
       return res.json({
@@ -523,7 +523,7 @@ app.get('/', (req, res) => {
       webhook: 'POST /webhook',
       health: 'GET /health',
       ping: 'GET /ping',
-      test-mysql: 'GET /test-mysql',
+      test-mysql: 'GET /test_mysql',
       conversations: 'GET /conversations'
     }
   });
@@ -545,7 +545,7 @@ async function startServer() {
     console.log(`🌐 URLs importantes:`);
     console.log(`   • Webhook: http://localhost:${PORT}/webhook`);
     console.log(`   • Health: http://localhost:${PORT}/health`);
-    console.log(`   • Test MySQL: http://localhost:${PORT}/test-mysql`);
+    console.log(`   • Test MySQL: http://localhost:${PORT}/test_mysql`);
     console.log(`   • Ping: http://localhost:${PORT}/ping (UptimeRobot)`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ HABILITADO' : '❌ DESABILITADO'}`);
   });
