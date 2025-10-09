@@ -1,7 +1,7 @@
 const express = require('express');
 const OpenAI = require('openai');
 const mysql = require('mysql2/promise');
-const fetch = require('node-fetch'); // Adicione esta linha
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
@@ -92,7 +92,7 @@ function rotateToNextApi() {
   return getCurrentClient();
 }
 
-// Função para fazer chamada à API com tratamento de rate limit
+// Função para fazer chamada à API com tratamento de rate limit - COM TEMPERATURE BAIXA
 async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
   let lastError;
   
@@ -105,8 +105,8 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.7,
-        top_p: 1.0,
+        temperature: 0.3,  // REDUZIDO para maior aderência ao prompt
+        top_p: 0.9,        // REDUZIDO para menos criatividade
         model: model
       });
       
@@ -163,12 +163,25 @@ async function testMySQLConnection() {
   }
 }
 
-// Função para gerar messages a partir do PHP - CORRIGIDA
+// Função para gerar messages a partir do PHP - VERSÃO MELHORADA COM LOGS
 async function gerarMessages(senderName, groupName, history) {
   try {
     console.log('🌐 Buscando configurações do PHP...');
     const res = await fetch("https://msapp.rf.gd/prompt.php");
+    
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    
     const config = await res.json();
+    
+    console.log('✅ Configurações carregadas:', {
+      version: config.version,
+      role: config.role,
+      basePromptLength: config.basePrompt?.length,
+      includeUserInfo: config.includeUserInfo,
+      includeHistory: config.includeHistory
+    });
 
     let content = config.basePrompt + "\n\n";
 
@@ -184,23 +197,30 @@ async function gerarMessages(senderName, groupName, history) {
       content += config.customInstructions;
     }
 
-    const messages = [{ role: config.role, content: content.trim() }];
+    const messages = [{ role: config.role || "system", content: content.trim() }];
     
-    console.log("✅ Configurações carregadas do PHP");
-    console.log("📝 Mensagem do sistema:", messages[0].content.substring(0, 100) + "...");
+    console.log("📝 MENSAGEM DO SISTEMA COMPLETA:");
+    console.log("═".repeat(50));
+    console.log(messages[0].content);
+    console.log("═".repeat(50));
     
     return messages;
   } catch (error) {
     console.error('❌ Erro ao carregar configurações do PHP:', error);
-    // Fallback caso o PHP não esteja disponível
+    // Fallback ULTRA RESTRITIVO
     const fallbackMessages = [
       {
         role: "system",
-        content: `Você é um atendente útil e prestativo.
+        content: `VOCÊ É VENDEDOR DO CURSO DA BUS FINANÇAS. SUA ÚNICA FUNÇÃO É VENDER. 
+NUNCA responda outras perguntas. 
+NUNCA ofereça ajuda genérica.
+SEMPRE venda o curso.
+SE falarem de outros assuntos, diga: "Só posso ajudar com a venda do curso financeiro."
 ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
 ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
       }
     ];
+    console.log("⚠️  Usando fallback restritivo");
     return fallbackMessages;
   }
 }
@@ -397,7 +417,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Webhook principal - CORRIGIDO
+// Webhook principal - VERSÃO MELHORADA COM VERIFICAÇÕES
 app.post('/webhook', async (req, res) => {
   try {
     const {
@@ -409,15 +429,32 @@ app.post('/webhook', async (req, res) => {
       receiveMessageApp
     } = req.body;
 
-    console.log(`📩 Mensagem de ${senderName}${groupName ? ` no grupo ${groupName}` : ''}: ${senderMessage}`);
+    console.log(`📩 Mensagem de ${senderName}${groupName ? ` no grupo ${groupName}` : ''}: "${senderMessage}"`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? 'HABILITADO' : 'DESABILITADO'}`);
     console.log(`🔑 API atual: ${currentApiIndex}`);
 
     // Busca histórico recente da conversa
     const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
     
-    // Gera as messages a partir do PHP - CORREÇÃO AQUI
+    // Gera as messages a partir do PHP
     let messages = await gerarMessages(senderName, groupName, history);
+
+    // VERIFICAÇÃO CRÍTICA - Log da primeira message do sistema
+    if (messages.length > 0 && messages[0].role === 'system') {
+      const systemMessage = messages[0].content;
+      const isSalesPrompt = systemMessage.includes('VENDER') || 
+                           systemMessage.includes('VENDA') || 
+                           systemMessage.includes('CURSO') ||
+                           systemMessage.includes('BUS FINANÇAS');
+      
+      console.log(`🎯 PROMPT DE VENDA: ${isSalesPrompt ? '✅ ATIVADO' : '❌ NÃO DETECTADO'}`);
+      
+      if (!isSalesPrompt) {
+        console.log('🚨 ALERTA: Prompt não parece ser de vendas! Forçando comportamento...');
+        // Força o comportamento de vendas
+        messages[0].content += "\n\nIMPORTANTE: VOCÊ DEVE VENDER O CURSO FINANCEIRO. NÃO RESPONDA OUTROS ASSUNTOS.";
+      }
+    }
 
     // Adiciona histórico ao contexto
     history.forEach(conv => {
@@ -430,10 +467,29 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`🤖 Processando com ${messages.length} mensagens de contexto (${history.length} do histórico)`);
 
+    // LOG FINAL das mensagens que serão enviadas
+    console.log('📤 MENSAGENS ENVIADAS PARA IA:');
+    messages.forEach((msg, index) => {
+      const contentPreview = msg.content.length > 100 ? msg.content.substring(0, 100) + '...' : msg.content;
+      console.log(`   [${index}] ${msg.role}: ${contentPreview}`);
+    });
+
     // Processa a mensagem com a IA
     const response = await callAIWithFallback(messages);
 
     const aiResponse = response.choices[0].message.content;
+
+    // VERIFICAÇÃO DA RESPOSTA
+    const isSalesResponse = aiResponse.toLowerCase().includes('curso') || 
+                           aiResponse.toLowerCase().includes('venda') || 
+                           aiResponse.toLowerCase().includes('financeiro') ||
+                           aiResponse.toLowerCase().includes('bus finanças');
+    
+    console.log(`🎯 RESPOSTA FOI DE VENDA: ${isSalesResponse ? '✅ SIM' : '❌ NÃO'}`);
+    
+    if (!isSalesResponse) {
+      console.log('🚨 RESPOSTA INADEQUADA:', aiResponse);
+    }
 
     // Salva a conversa no banco
     const savedId = await saveConversation({
@@ -476,7 +532,22 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Rotas restantes (mantidas iguais)
+// Rota para testar o prompt atual
+app.get('/test-prompt', async (req, res) => {
+  try {
+    const messages = await gerarMessages("UsuarioTeste", null, []);
+    res.json({
+      status: 'success',
+      systemMessage: messages[0].content,
+      length: messages[0].content.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Rotas restantes
 app.get('/conversations', async (req, res) => {
   if (!mysqlEnabled || !pool) {
     return res.status(500).json({ 
@@ -618,7 +689,8 @@ app.get('/', (req, res) => {
       status: 'GET /status',
       ping: 'GET /ping',
       'rotate-api': 'POST /rotate-api',
-      conversations: 'GET /conversations (admin)'
+      conversations: 'GET /conversations (admin)',
+      'test-prompt': 'GET /test-prompt (debug)'
     }
   });
 });
@@ -643,19 +715,28 @@ async function startServer() {
     console.log(`🔍 Health: GET /health`);
     console.log(`📊 Status completo: GET /status`);
     console.log(`🔄 Rotacionar API: POST /rotate-api`);
+    console.log(`🧪 Testar prompt: GET /test-prompt`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     
     console.log('\n🎯 SISTEMA MULTI-API CONFIGURADO:');
     console.log(`   ✅ ${API_KEYS.length} chaves disponíveis`);
     console.log(`   ✅ Modelo fixo: ${model}`);
+    console.log(`   ✅ Temperature baixa (0.3) para seguir prompt`);
     console.log(`   ✅ Rotacionamento automático em rate limit`);
     console.log(`   ✅ Fallback para próxima API`);
-    console.log(`   ✅ Estatísticas de uso`);
+    console.log(`   ✅ Verificação de prompt de vendas`);
+    console.log(`   ✅ Logs detalhados para debugging`);
     console.log(`   ✅ Prompt dinâmico via PHP`);
     
     if (mysqlEnabled) {
       console.log('\n💬 Pronto para receber mensagens com histórico de contexto!');
     }
+
+    console.log('\n⚠️  INSTRUÇÕES IMPORTANTES:');
+    console.log('   1. Acesse https://msapp.rf.gd/editar_prompt.php');
+    console.log('   2. Configure um prompt FORTE de vendas');
+    console.log('   3. Teste com GET /test-prompt para verificar');
+    console.log('   4. Envie "Oi" para testar o comportamento');
   });
 }
 
