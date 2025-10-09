@@ -1,33 +1,27 @@
 const express = require('express');
 const OpenAI = require('openai');
 const mysql = require('mysql2/promise');
-const https = require('https');
-const http = require('http');
 
 const app = express();
 app.use(express.json());
 
 // Configurações das APIs - múltiplas chaves
 const API_KEYS = [
-  process.env.GITHUB_TOKEN_1,
-  process.env.GITHUB_TOKEN_2,
-  process.env.GITHUB_TOKEN_3,
-  process.env.GITHUB_TOKEN_4,
-].filter(Boolean);
+  process.env.GITHUB_TOKEN_1,  // Sua primeira chave
+  process.env.GITHUB_TOKEN_2,  // Sua segunda chave
+  process.env.GITHUB_TOKEN_3,  // Terceira chave (opcional)
+  process.env.GITHUB_TOKEN_4,  // Quarta chave (opcional)
+].filter(Boolean); // Remove chaves vazias
 
 const endpoint = "https://models.github.ai/inference";
-const model = "openai/gpt-4.1";
-
-// URL do seu PHP no InfinityFree - CONFIGURE ESTA URL!
-const PROMPT_API_URL = process.env.PROMPT_API_URL || 'https://seu-site.infinityfree.com/api.php';
-const PROMPT_API_TOKEN = process.env.PROMPT_API_TOKEN || 'SEU_TOKEN_SECRETO';
+const model = "openai/gpt-4.1"; // Mantemos apenas o modelo 4.1
 
 // Sistema de rotacionamento de APIs
 let currentApiIndex = 0;
 let rateLimitStats = {};
 
 // String de conexão direta do Railway
-const MYSQL_CONNECTION_STRING = process.env.MYSQL_CONNECTION_STRING || "mysql://root:ZefFlJwoGgbGclwcSyOeZuvMGVqmhvtH@trolley.proxy.rlwy.net:52398/railway";
+const MYSQL_CONNECTION_STRING = "mysql://root:ZefFlJwoGgbGclwcSyOeZuvMGVqmhvtH@trolley.proxy.rlwy.net:52398/railway";
 
 // Parse da string de conexão
 function parseMySQLString(connectionString) {
@@ -68,6 +62,7 @@ const dbConfig = parseMySQLString(MYSQL_CONNECTION_STRING) || {
 // Verifica se há pelo menos uma chave API disponível
 if (API_KEYS.length === 0) {
   console.error("ERRO: Nenhuma GITHUB_TOKEN encontrada nas variáveis de ambiente");
+  console.error("Configure GITHUB_TOKEN_1, GITHUB_TOKEN_2, etc.");
   process.exit(1);
 }
 
@@ -87,6 +82,7 @@ function rotateToNextApi() {
   const oldIndex = currentApiIndex;
   currentApiIndex = (currentApiIndex + 1) % API_KEYS.length;
   
+  // Registrar o rate limit na API antiga
   if (!rateLimitStats[oldIndex]) {
     rateLimitStats[oldIndex] = { rateLimitedAt: new Date() };
   } else {
@@ -94,132 +90,9 @@ function rotateToNextApi() {
   }
   
   console.log(`🔄 Rotacionando API: ${oldIndex} → ${currentApiIndex}`);
+  console.log(`📊 Estatísticas: ${Object.keys(rateLimitStats).length} APIs com rate limit`);
+  
   return getCurrentClient();
-}
-
-// Função para carregar prompt do PHP
-async function loadPromptFromPHP() {
-  return new Promise((resolve, reject) => {
-    const url = `${PROMPT_API_URL}?token=${PROMPT_API_TOKEN}`;
-    const urlObj = new URL(url);
-    const protocol = urlObj.protocol === 'https:' ? https : http;
-    
-    console.log(`🌐 Buscando prompt de: ${urlObj.host}`);
-    
-    const req = protocol.get(url, (res) => {
-      if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
-        return;
-      }
-
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        console.log('✅ Prompt carregado do PHP');
-        resolve(data);
-      });
-    });
-
-    req.on('error', (error) => {
-      console.error('❌ Erro ao carregar prompt do PHP:', error.message);
-      reject(error);
-    });
-
-    req.setTimeout(10000, () => {
-      req.destroy();
-      reject(new Error('Timeout ao carregar prompt (10s)'));
-    });
-  });
-}
-
-// Prompt padrão de fallback
-const defaultPrompt = `Você é um atendente da loja "Mercado dos Sabores". Seja prestativo, educado e objetivo.
-
-INFORMAÇÕES GERAIS:
-• Endereço: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
-• Pagamento: PIX e Dinheiro
-• Site: https://lojams.rf.gd 
-• Retirada no local ou via UberFlash (custo por conta do cliente)
-
-CATÁLOGO DE PRODUTOS:
-
-🎂 BROWNIES (R$ 4,00 cada):
-• Brownie Ferrero - Brigadeiro 50% cacau, creme de avelã e amendoim
-• Brownie Doce de Leite - Recheio cremoso de doce de leite
-• Brownie Ninho - Recheio cremoso de leite Ninho
-• Brownie Paçoca - Recheio cremoso de paçoca
-• Brownie Pistache - Casquinha crocante, interior molhadinho
-• Brownie Brigadeiro - Tradicional brigadeiro
-
-INSTRUÇÕES PARA ATENDIMENTO:
-1. Sempre informe preço e disponibilidade ao mencionar produtos
-2. Para itens indisponíveis, sugira alternativas similares
-3. Destaque promoções e descontos
-4. Direcione para o site para ver fotos e fazer pedidos
-5. Seja claro sobre condições de pagamento e retirada
-6. Mantenha respostas curtas e objetivas
-7. Use emojis para deixar a comunicação mais amigável
-8. Considere o histórico da conversa para dar respostas contextuais`;
-
-// Variável para armazenar o prompt atual
-let currentPrompt = defaultPrompt;
-let lastPromptUpdate = null;
-let promptErrorCount = 0;
-let lastPromptHash = '';
-
-// Função para calcular hash do prompt (para verificar mudanças)
-function calculatePromptHash(prompt) {
-  let hash = 0;
-  for (let i = 0; i < prompt.length; i++) {
-    const char = prompt.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return hash.toString();
-}
-
-// Função para inicializar e atualizar o prompt
-async function updatePrompt() {
-  try {
-    const newPrompt = await loadPromptFromPHP();
-    if (newPrompt && newPrompt.trim().length > 0) {
-      const newHash = calculatePromptHash(newPrompt);
-      
-      // Só atualiza se o prompt realmente mudou
-      if (newHash !== lastPromptHash) {
-        currentPrompt = newPrompt;
-        lastPromptHash = newHash;
-        lastPromptUpdate = new Date();
-        promptErrorCount = 0;
-        console.log(`📝 Prompt ATUALIZADO - ${currentPrompt.length} caracteres`);
-        console.log(`🆕 Hash: ${newHash}`);
-      } else {
-        console.log(`📝 Prompt já está atualizado - ${currentPrompt.length} caracteres`);
-      }
-    } else {
-      throw new Error('Prompt vazio retornado do servidor');
-    }
-  } catch (error) {
-    promptErrorCount++;
-    console.error(`❌ Erro ao atualizar prompt (tentativa ${promptErrorCount}):`, error.message);
-    
-    // Se houver muitos erros consecutivos, usar prompt padrão
-    if (promptErrorCount >= 3) {
-      console.log('🔄 Usando prompt padrão devido a erros consecutivos');
-      currentPrompt = defaultPrompt;
-      lastPromptHash = calculatePromptHash(defaultPrompt);
-    }
-  }
-}
-
-// Função para garantir que o prompt está atualizado antes de processar
-async function ensurePromptUpdated() {
-  try {
-    await updatePrompt();
-  } catch (error) {
-    console.error('❌ Erro ao garantir prompt atualizado:', error.message);
-    // Continua com o prompt atual mesmo em caso de erro
-  }
 }
 
 // Função para fazer chamada à API com tratamento de rate limit
@@ -235,28 +108,34 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.4,
+        temperature: 0.7,
         top_p: 1.0,
         model: model
       });
       
-      console.log(`✅ Sucesso com API ${currentApiIndex}`);
+      console.log(`✅ Sucesso com API ${currentTokenIndex}`);
       return response;
       
     } catch (error) {
       lastError = error;
       
+      // Verificar se é rate limit
       if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
         console.log(`⏰ Rate limit na API ${currentTokenIndex}: ${error.message}`);
+        
+        // Rotacionar para próxima API
         rotateToNextApi();
         
+        // Se ainda temos tentativas, continuar
         if (attempt < maxRetries - 1) {
           console.log(`🔄 Tentando próxima API...`);
           continue;
         }
       } else {
+        // Outro tipo de erro
         console.error(`❌ Erro na API ${currentTokenIndex}:`, error.message);
         
+        // Para erros não relacionados a rate limit, podemos tentar outra API
         if (attempt < maxRetries - 1) {
           console.log(`🔄 Tentando próxima API devido a erro...`);
           rotateToNextApi();
@@ -266,6 +145,7 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
     }
   }
   
+  // Se chegou aqui, todas as APIs falharam
   throw lastError || new Error('Todas as APIs falharam');
 }
 
@@ -278,6 +158,8 @@ async function testMySQLConnection() {
   console.log('🔌 Testando conexão MySQL...');
   console.log(`   Host: ${dbConfig.host}`);
   console.log(`   Database: ${dbConfig.database}`);
+  console.log(`   User: ${dbConfig.user}`);
+  console.log(`   Port: ${dbConfig.port}`);
   
   try {
     const testConnection = await mysql.createConnection(dbConfig);
@@ -287,6 +169,7 @@ async function testMySQLConnection() {
     return true;
   } catch (error) {
     console.error('❌ Teste de conexão MySQL falhou:', error.message);
+    console.error('📋 Código do erro:', error.code);
     return false;
   }
 }
@@ -294,12 +177,18 @@ async function testMySQLConnection() {
 async function initializeDatabase() {
   console.log('🔄 Inicializando MySQL para Railway...');
   
+  // Verifica se as configurações estão definidas
   if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
-    console.log('🚫 Configurações do MySQL incompletas');
+    console.log('🚫 Configurações do MySQL incompletas:');
+    console.log(`   Host: ${dbConfig.host}`);
+    console.log(`   User: ${dbConfig.user}`);
+    console.log(`   Database: ${dbConfig.database}`);
+    console.log(`   Password: ${dbConfig.password ? '***' : 'AUSENTE'}`);
     mysqlEnabled = false;
     return;
   }
 
+  // Testa conexão básica primeiro
   const connectionTest = await testMySQLConnection();
   if (!connectionTest) {
     console.log('🚫 MySQL desabilitado - não foi possível conectar');
@@ -317,9 +206,12 @@ async function initializeDatabase() {
       timeout: 10000,
     });
 
+    // Testa a conexão do pool
     const connection = await pool.getConnection();
     console.log('✅ Pool MySQL conectado com sucesso');
     
+    // Cria a tabela se não existir (versão simplificada)
+    console.log('🔄 Verificando/Criando tabela conversations...');
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS conversations (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -336,12 +228,35 @@ async function initializeDatabase() {
     `);
     console.log('✅ Tabela conversations verificada/criada');
     
+    // Testa inserção e leitura
+    console.log('🔄 Testando inserção e leitura...');
+    const testSessionId = 'test_session_' + Date.now();
+    const [insertResult] = await connection.execute(
+      `INSERT INTO conversations (session_id, sender_name, sender_message, ai_response) VALUES (?, ?, ?, ?)`,
+      [testSessionId, 'test_user', 'Test message', 'Test response']
+    );
+    
+    const [selectResult] = await connection.execute(
+      `SELECT * FROM conversations WHERE id = ?`,
+      [insertResult.insertId]
+    );
+    
+    if (selectResult.length > 0) {
+      console.log('✅ Teste de inserção/leitura: OK');
+      
+      // Limpa teste
+      await connection.execute(`DELETE FROM conversations WHERE id = ?`, [insertResult.insertId]);
+    } else {
+      console.error('❌ Teste de inserção/leitura falhou');
+    }
+    
     connection.release();
     mysqlEnabled = true;
     console.log('🎉 MySQL totalmente inicializado e funcionando!');
     
   } catch (error) {
     console.error('❌ Erro na inicialização do MySQL:', error.message);
+    console.error('📋 Código do erro:', error.code);
     mysqlEnabled = false;
     
     if (pool) {
@@ -416,13 +331,14 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
     console.log(`📚 Buscando histórico para sessão: ${sessionId}`);
     
+    // CORREÇÃO: Usar template string para LIMIT em vez de parâmetro
     const safeLimit = parseInt(limit);
     const [rows] = await pool.execute(
       `SELECT sender_message, ai_response, created_at 
        FROM conversations 
        WHERE session_id = ? 
        ORDER BY created_at DESC 
-       LIMIT ${safeLimit}`,
+       LIMIT ${safeLimit}`,  // LIMIT fixo na query, não como parâmetro
       [sessionId]
     );
     
@@ -431,6 +347,7 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
   } catch (error) {
     console.error('❌ Erro ao buscar histórico:', error.message);
+    console.error('📋 Código do erro:', error.code);
     return [];
   }
 }
@@ -442,6 +359,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   try {
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     
+    // Método alternativo mais simples
     const [recentIds] = await pool.execute(
       `SELECT id FROM conversations 
        WHERE session_id = ? 
@@ -467,7 +385,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Webhook principal - ATUALIZADO: sempre carrega o prompt antes de processar
+// Webhook principal
 app.post('/webhook', async (req, res) => {
   try {
     const {
@@ -483,19 +401,94 @@ app.post('/webhook', async (req, res) => {
     console.log(`🗃️  MySQL: ${mysqlEnabled ? 'HABILITADO' : 'DESABILITADO'}`);
     console.log(`🔑 API atual: ${currentApiIndex}`);
 
-    // 🔄 ATUALIZAÇÃO CRÍTICA: Sempre verificar e atualizar o prompt antes de processar
-    console.log('🔄 Verificando atualização do prompt...');
-    await ensurePromptUpdated();
-    console.log(`📝 Prompt: ${currentPrompt.length} caracteres (atualizado: ${lastPromptUpdate ? lastPromptUpdate.toLocaleTimeString() : 'NUNCA'})`);
-
     // Busca histórico recente da conversa
     const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
     
-    // Prepara o contexto com histórico e prompt dinâmico
+    // Prepara o contexto com histórico
     const messages = [
       {
         role: "system",
-        content: currentPrompt + `\n\n${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
+        content: `Você é um atendente da loja "Mercado dos Sabores". Seja prestativo, educado e objetivo.
+
+INFORMAÇÕES GERAIS:
+• Endereço: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
+• Pagamento: PIX e Dinheiro
+• Site: https://lojams.rf.gd 
+• Retirada no local ou via UberFlash (custo por conta do cliente)
+
+CATÁLOGO DE PRODUTOS:
+
+🎂 BROWNIES (R$ 4,00 cada):
+• Brownie Ferrero - Brigadeiro 50% cacau, creme de avelã e amendoim
+• Brownie Doce de Leite - Recheio cremoso de doce de leite
+• Brownie Ninho - Recheio cremoso de leite Ninho
+• Brownie Paçoca - Recheio cremoso de paçoca
+• Brownie Pistache - Casquinha crocante, interior molhadinho
+• Brownie Brigadeiro - Tradicional brigadeiro
+• ⚠️ Brownie Beijinho - INDISPONÍVEL
+
+🍫 DINDINS GOURMET:
+• Dindin Oreo - R$ 5,50
+• Dindin Ninho com Avelã - R$ 6,00
+• Dindin Ninho com Geleia de Morango - R$ 6,00
+• Dindin Paçoca - R$ 5,50
+• Dindin Browninho - R$ 5,50
+
+🥣 BOLOS NO POTE:
+• Bolo de Pote Ferrero - R$ 12,00
+• Bolo de Pote Maracujá com Chocolate - R$ 12,00
+• Bolo de Pote Ninho com Geleia de Morango - R$ 11,00
+• ⚠️ Bolo de Pote Cenoura - INDISPONÍVEL
+• ⚠️ Bolo de Pote Coco com Abacaxi - INDISPONÍVEL
+• ⚠️ Bolo de Pote Prestígio - INDISPONÍVEL
+
+🎂 BOLOS:
+• Bolo de Chocolate (500g) - R$ 27,00 (sob encomenda)
+• ⚠️ Bolo Indiano - R$ 6,00 (INDISPONÍVEL)
+
+🍮 SOBREMESAS:
+• Delícia de Abacaxi - R$ 5,50
+• Pavê KitKat - R$ 6,50
+• Sensação - R$ 6,50
+• Torta Cookie - R$ 6,50
+• Torta de Limão - R$ 5,00
+• ⚠️ Pudim - R$ 3,50 (INDISPONÍVEL)
+
+🥧 EMPADAS:
+• Empada Camarão - R$ 6,00
+• Empada Frango - R$ 4,00
+• ⚠️ Empada Carne do Sol - R$ 5,50 (INDISPONÍVEL)
+
+🍕 SALGADOS:
+• Coxinha - R$ 5,00
+• Salgado Frito Carne com Queijo - R$ 5,50
+• Salgado Frito Misto - R$ 4,70
+• Salgado Salsicha - R$ 4,00
+
+🎉 KITS FESTA (sob encomenda):
+• Kit 100 Docinhos - R$ 90,00
+• Kit 50 Docinhos - R$ 45,00
+• Kit 100 Salgados - R$ 65,00
+• Kit 50 Salgados - R$ 32,50
+• Kit 100 Mini Brownies - R$ 160,00
+• Kit 50 Mini Brownies - R$ 80,00
+
+📦 REVENDA DE BROWNIES:
+• Preço: R$ 3,50/unidade (acima de 15 unidades)
+• Sabores disponíveis: Brigadeiro, Ninho, Beijinho, Paçoca
+• Condições: 50% de entrada, restante na retirada/entrega
+
+INSTRUÇÕES PARA ATENDIMENTO:
+1. Sempre informe preço e disponibilidade ao mencionar produtos
+2. Para itens indisponíveis, sugira alternativas similares
+3. Destaque promoções e descontos
+4. Direcione para o site para ver fotos e fazer pedidos
+5. Seja claro sobre condições de pagamento e retirada
+6. Mantenha respostas curtas e objetivas
+7. Use emojis para deixar a comunicação mais amigável
+8. Considere o histórico da conversa para dar respostas contextuais
+
+        ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
         ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
       }
     ];
@@ -511,7 +504,7 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`🤖 Processando com ${messages.length} mensagens de contexto (${history.length} do histórico)`);
 
-    // Processa a mensagem com a IA
+    // Processa a mensagem com a IA (com fallback para múltiplas APIs)
     const response = await callAIWithFallback(messages);
 
     const aiResponse = response.choices[0].message.content;
@@ -543,6 +536,7 @@ app.post('/webhook', async (req, res) => {
   } catch (error) {
     console.error('❌ Erro ao processar mensagem:', error);
     
+    // Mensagem de erro mais específica
     let errorMessage = "Desculpe, estou tendo problemas técnicos. Tente novamente!";
     
     if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
@@ -556,100 +550,6 @@ app.post('/webhook', async (req, res) => {
     });
   }
 });
-
-// ========== NOVAS ROTAS DE DEBUG ==========
-
-// Rota para debug do prompt - mostra o prompt atual em texto puro
-app.get('/debug-prompt', (req, res) => {
-  res.set('Content-Type', 'text/plain; charset=utf-8');
-  res.send(currentPrompt);
-});
-
-// Rota para debug detalhado do prompt
-app.get('/debug-prompt-detailed', (req, res) => {
-  const promptInfo = {
-    length: currentPrompt.length,
-    first100Chars: currentPrompt.substring(0, 100),
-    last100Chars: currentPrompt.substring(currentPrompt.length - 100),
-    hash: lastPromptHash,
-    lastUpdate: lastPromptUpdate,
-    errorCount: promptErrorCount,
-    source: promptErrorCount >= 3 ? 'DEFAULT' : 'PHP'
-  };
-  
-  res.json(promptInfo);
-});
-
-// Rota para forçar recarregamento e mostrar diferenças
-app.get('/force-reload-prompt', async (req, res) => {
-  try {
-    const oldPrompt = currentPrompt;
-    const oldHash = lastPromptHash;
-    
-    console.log('🔄 FORÇANDO recarregamento do prompt...');
-    const newPrompt = await loadPromptFromPHP();
-    
-    if (newPrompt && newPrompt.trim().length > 0) {
-      const newHash = calculatePromptHash(newPrompt);
-      
-      const changed = newHash !== oldHash;
-      
-      currentPrompt = newPrompt;
-      lastPromptHash = newHash;
-      lastPromptUpdate = new Date();
-      promptErrorCount = 0;
-      
-      res.json({
-        success: true,
-        changed: changed,
-        oldLength: oldPrompt.length,
-        newLength: newPrompt.length,
-        oldHash: oldHash,
-        newHash: newHash,
-        message: changed ? '✅ Prompt foi atualizado!' : 'ℹ️  Prompt não mudou',
-        preview: {
-          old: oldPrompt.substring(0, 200) + '...',
-          new: newPrompt.substring(0, 200) + '...'
-        }
-      });
-    } else {
-      throw new Error('Prompt vazio retornado do servidor');
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-// Rota para testar conexão com o PHP
-app.get('/test-php-connection', async (req, res) => {
-  try {
-    console.log('🧪 Testando conexão com PHP...');
-    const startTime = Date.now();
-    const prompt = await loadPromptFromPHP();
-    const endTime = Date.now();
-    
-    res.json({
-      success: true,
-      connectionTime: `${endTime - startTime}ms`,
-      promptLength: prompt.length,
-      first200Chars: prompt.substring(0, 200),
-      phpUrl: PROMPT_API_URL,
-      token: PROMPT_API_TOKEN ? '***' + PROMPT_API_TOKEN.slice(-4) : 'NONE'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-      phpUrl: PROMPT_API_URL,
-      token: PROMPT_API_TOKEN ? '***' + PROMPT_API_TOKEN.slice(-4) : 'NONE'
-    });
-  }
-});
-
-// ========== FIM DAS NOVAS ROTAS ==========
 
 // Rota para visualizar conversas
 app.get('/conversations', async (req, res) => {
@@ -678,7 +578,7 @@ app.get('/conversations', async (req, res) => {
   }
 });
 
-// Rota para status do banco, APIs e prompt (ATUALIZADA)
+// Rota para status do banco e APIs
 app.get('/status', async (req, res) => {
   try {
     let dbStatus = 'disabled';
@@ -703,32 +603,14 @@ app.get('/status', async (req, res) => {
       status: 'OK', 
       database: dbStatus,
       mysqlEnabled: mysqlEnabled,
-      prompt: {
-        length: currentPrompt.length,
-        lastUpdate: lastPromptUpdate,
-        source: promptErrorCount >= 3 ? 'DEFAULT' : 'PHP',
-        errorCount: promptErrorCount,
-        hash: lastPromptHash,
-        first50Chars: currentPrompt.substring(0, 50) + '...'
-      },
       apis: {
         total: API_KEYS.length,
         current: currentApiIndex,
         statistics: apiStats
       },
-      php: {
-        url: PROMPT_API_URL,
-        tokenConfigured: !!PROMPT_API_TOKEN
-      },
       model: model,
       timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()) + ' segundos',
-      debugEndpoints: {
-        promptText: '/debug-prompt',
-        promptDetailed: '/debug-prompt-detailed',
-        forceReload: '/force-reload-prompt',
-        testPHP: '/test-php-connection'
-      }
+      uptime: Math.floor(process.uptime()) + ' segundos'
     });
   } catch (error) {
     res.status(500).json({ 
@@ -736,35 +618,6 @@ app.get('/status', async (req, res) => {
       message: 'Service unhealthy'
     });
   }
-});
-
-// Rota para forçar atualização do prompt
-app.post('/reload-prompt', async (req, res) => {
-  try {
-    await updatePrompt();
-    res.json({
-      success: true,
-      message: 'Prompt recarregado',
-      promptLength: currentPrompt.length,
-      lastUpdate: lastPromptUpdate,
-      hash: lastPromptHash
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-// Rota para ver o prompt atual
-app.get('/current-prompt', (req, res) => {
-  res.json({
-    prompt: currentPrompt,
-    length: currentPrompt.length,
-    lastUpdate: lastPromptUpdate,
-    hash: lastPromptHash
-  });
 });
 
 // Rota para forçar rotação de API
@@ -785,18 +638,13 @@ app.get('/ping', (req, res) => {
   res.status(200).json({
     status: 'OK',
     mysql: mysqlEnabled ? 'connected' : 'disabled',
-    prompt: {
-      loaded: currentPrompt.length > 0,
-      length: currentPrompt.length,
-      hash: lastPromptHash
-    },
     apis: {
       total: API_KEYS.length,
       current: currentApiIndex
     },
     model: model,
     timestamp: new Date().toISOString(),
-    service: 'Railway MySQL + Multi-API + Dynamic Prompt'
+    service: 'Railway MySQL + Multi-API'
   });
 });
 
@@ -817,12 +665,6 @@ app.get('/health', async (req, res) => {
       status: 'OK', 
       database: dbStatus,
       mysqlEnabled: mysqlEnabled,
-      prompt: {
-        loaded: currentPrompt.length > 0,
-        length: currentPrompt.length,
-        lastUpdate: lastPromptUpdate,
-        hash: lastPromptHash
-      },
       apis: {
         total: API_KEYS.length,
         current: currentApiIndex
@@ -842,57 +684,38 @@ app.get('/health', async (req, res) => {
 // Rota raiz
 app.get('/', (req, res) => {
   res.json({ 
-    service: 'AutoReply Webhook com Multi-API + MySQL + Prompt Dinâmico',
+    service: 'AutoReply Webhook com Multi-API + MySQL',
     status: 'Online',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
-    prompt: {
-      loaded: currentPrompt.length > 0,
-      length: currentPrompt.length,
-      lastUpdate: lastPromptUpdate
-    },
     apis: {
       total: API_KEYS.length,
       current: currentApiIndex
     },
     model: model,
-    deployment: 'Railway + InfinityFree PHP',
+    deployment: 'Railway',
     endpoints: {
       webhook: 'POST /webhook',
       health: 'GET /health',
       status: 'GET /status',
       ping: 'GET /ping',
-      'reload-prompt': 'POST /reload-prompt',
-      'current-prompt': 'GET /current-prompt',
       'rotate-api': 'POST /rotate-api',
-      conversations: 'GET /conversations (admin)',
-      'debug-prompt': 'GET /debug-prompt (texto puro)',
-      'debug-prompt-detailed': 'GET /debug-prompt-detailed (JSON)',
-      'force-reload-prompt': 'GET /force-reload-prompt',
-      'test-php-connection': 'GET /test-php-connection'
+      conversations: 'GET /conversations (admin)'
     }
   });
 });
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com Multi-API e Prompt Dinâmico...');
+  console.log('🚀 Iniciando servidor AutoReply com Multi-API...');
   console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
   console.log(`🤖 Modelo: ${model}`);
-  console.log(`🌐 Prompt URL: ${PROMPT_API_URL}`);
   console.log('🔧 Configurações MySQL:');
   console.log(`   Host: ${dbConfig.host}`);
   console.log(`   Database: ${dbConfig.database}`);
+  console.log(`   User: ${dbConfig.user}`);
+  console.log(`   Port: ${dbConfig.port}`);
   
-  // Inicializar MySQL
   await initializeDatabase();
-  
-  // Inicializar prompt (aguardar primeiro carregamento)
-  console.log('🔄 Carregando prompt inicial do PHP...');
-  await updatePrompt();
-  
-  // Configurar atualização periódica do prompt (a cada 2 minutos - apenas como backup)
-  setInterval(updatePrompt, 2 * 60 * 1000);
-  console.log('⏰ Atualização automática do prompt configurada (2 minutos - backup)');
   
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
@@ -900,38 +723,20 @@ async function startServer() {
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🔍 Health: GET /health`);
     console.log(`📊 Status completo: GET /status`);
-    console.log(`🔄 Recarregar prompt: POST /reload-prompt`);
+    console.log(`🔄 Rotacionar API: POST /rotate-api`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
-    console.log(`📝 Prompt: ${currentPrompt.length} caracteres carregados`);
-    console.log(`🔐 Hash do prompt: ${lastPromptHash}`);
     
-    console.log('\n🎯 SISTEMA CONFIGURADO:');
-    console.log(`   ✅ ${API_KEYS.length} chaves API`);
-    console.log(`   ✅ Prompt dinâmico via PHP (ATUALIZAÇÃO A CADA MENSAGEM)`);
-    console.log(`   ✅ Sistema de hash para detectar mudanças`);
+    console.log('\n🎯 SISTEMA MULTI-API CONFIGURADO:');
+    console.log(`   ✅ ${API_KEYS.length} chaves disponíveis`);
+    console.log(`   ✅ Modelo fixo: ${model}`);
     console.log(`   ✅ Rotacionamento automático em rate limit`);
-    console.log(`   ✅ Histórico de conversas com MySQL`);
-    
-    console.log('\n🔧 ROTAS DE DEBUG:');
-    console.log(`   📝 GET /debug-prompt - Mostra o prompt atual em texto puro`);
-    console.log(`   🔍 GET /debug-prompt-detailed - Informações detalhadas do prompt`);
-    console.log(`   🔄 GET /force-reload-prompt - Força recarregamento e mostra diferenças`);
-    console.log(`   🧪 GET /test-php-connection - Testa conexão com PHP`);
+    console.log(`   ✅ Fallback para próxima API`);
+    console.log(`   ✅ Estatísticas de uso`);
     
     if (mysqlEnabled) {
-      console.log('💬 Pronto para receber mensagens com histórico de contexto!');
+      console.log('\n💬 Pronto para receber mensagens com histórico de contexto!');
     }
   });
 }
-
-// Tratamento de erros não capturados
-process.on('unhandledRejection', (error) => {
-  console.error('❌ Erro não tratado:', error);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('❌ Exceção não capturada:', error);
-  process.exit(1);
-});
 
 startServer().catch(console.error);
