@@ -405,93 +405,29 @@ app.post('/webhook', async (req, res) => {
     const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
     
     // Prepara o contexto com histórico
-    const messages = [
-      {
-        role: "system",
-        content: `Você é um atendente da loja "Mercado dos Sabores". Seja prestativo, educado e objetivo.
+    async function gerarResposta(senderName, groupName, history) {
+  const res = await fetch("https://lojams.rf.gd/prompt.php");
+  const config = await res.json();
 
-INFORMAÇÕES GERAIS:
-• Endereço: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
-• Pagamento: PIX e Dinheiro
-• Site: https://lojams.rf.gd 
-• Retirada no local ou via UberFlash (custo por conta do cliente)
+  let content = config.basePrompt + "\n\n";
 
-CATÁLOGO DE PRODUTOS:
+  if (config.includeUserInfo) {
+    content += groupName ? `Estamos no grupo "${groupName}".\n` : `Conversando com ${senderName}.\n`;
+  }
 
-🎂 BROWNIES (R$ 4,00 cada):
-• Brownie Ferrero - Brigadeiro 50% cacau, creme de avelã e amendoim
-• Brownie Doce de Leite - Recheio cremoso de doce de leite
-• Brownie Ninho - Recheio cremoso de leite Ninho
-• Brownie Paçoca - Recheio cremoso de paçoca
-• Brownie Pistache - Casquinha crocante, interior molhadinho
-• Brownie Brigadeiro - Tradicional brigadeiro
-• ⚠️ Brownie Beijinho - INDISPONÍVEL
+  if (config.includeHistory && history.length > 0) {
+    content += `Esta conversa tem ${history.length} mensagens de histórico.\n`;
+  }
 
-🍫 DINDINS GOURMET:
-• Dindin Oreo - R$ 5,50
-• Dindin Ninho com Avelã - R$ 6,00
-• Dindin Ninho com Geleia de Morango - R$ 6,00
-• Dindin Paçoca - R$ 5,50
-• Dindin Browninho - R$ 5,50
+  if (config.customInstructions) {
+    content += config.customInstructions;
+  }
 
-🥣 BOLOS NO POTE:
-• Bolo de Pote Ferrero - R$ 12,00
-• Bolo de Pote Maracujá com Chocolate - R$ 12,00
-• Bolo de Pote Ninho com Geleia de Morango - R$ 11,00
-• ⚠️ Bolo de Pote Cenoura - INDISPONÍVEL
-• ⚠️ Bolo de Pote Coco com Abacaxi - INDISPONÍVEL
-• ⚠️ Bolo de Pote Prestígio - INDISPONÍVEL
-
-🎂 BOLOS:
-• Bolo de Chocolate (500g) - R$ 27,00 (sob encomenda)
-• ⚠️ Bolo Indiano - R$ 6,00 (INDISPONÍVEL)
-
-🍮 SOBREMESAS:
-• Delícia de Abacaxi - R$ 5,50
-• Pavê KitKat - R$ 6,50
-• Sensação - R$ 6,50
-• Torta Cookie - R$ 6,50
-• Torta de Limão - R$ 5,00
-• ⚠️ Pudim - R$ 3,50 (INDISPONÍVEL)
-
-🥧 EMPADAS:
-• Empada Camarão - R$ 6,00
-• Empada Frango - R$ 4,00
-• ⚠️ Empada Carne do Sol - R$ 5,50 (INDISPONÍVEL)
-
-🍕 SALGADOS:
-• Coxinha - R$ 5,00
-• Salgado Frito Carne com Queijo - R$ 5,50
-• Salgado Frito Misto - R$ 4,70
-• Salgado Salsicha - R$ 4,00
-
-🎉 KITS FESTA (sob encomenda):
-• Kit 100 Docinhos - R$ 90,00
-• Kit 50 Docinhos - R$ 45,00
-• Kit 100 Salgados - R$ 65,00
-• Kit 50 Salgados - R$ 32,50
-• Kit 100 Mini Brownies - R$ 160,00
-• Kit 50 Mini Brownies - R$ 80,00
-
-📦 REVENDA DE BROWNIES:
-• Preço: R$ 3,50/unidade (acima de 15 unidades)
-• Sabores disponíveis: Brigadeiro, Ninho, Beijinho, Paçoca
-• Condições: 50% de entrada, restante na retirada/entrega
-
-INSTRUÇÕES PARA ATENDIMENTO:
-1. Sempre informe preço e disponibilidade ao mencionar produtos
-2. Para itens indisponíveis, sugira alternativas similares
-3. Destaque promoções e descontos
-4. Direcione para o site para ver fotos e fazer pedidos
-5. Seja claro sobre condições de pagamento e retirada
-6. Mantenha respostas curtas e objetivas
-7. Use emojis para deixar a comunicação mais amigável
-8. Considere o histórico da conversa para dar respostas contextuais
-
-        ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
-        ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
-      }
-    ];
+  const messages = [{ role: config.role, content: content.trim() }];
+  
+  console.log("Configurações carregadas:", config);
+  console.log("Mensagem final:", messages[0].content);
+}
 
     // Adiciona histórico ao contexto
     history.forEach(conv => {
