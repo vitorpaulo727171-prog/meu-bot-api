@@ -235,12 +235,12 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.3,
+        temperature: 0.4,
         top_p: 1.0,
         model: model
       });
       
-      console.log(`✅ Sucesso com API ${currentTokenIndex}`);
+      console.log(`✅ Sucesso com API ${currentApiIndex}`);
       return response;
       
     } catch (error) {
@@ -557,6 +557,100 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// ========== NOVAS ROTAS DE DEBUG ==========
+
+// Rota para debug do prompt - mostra o prompt atual em texto puro
+app.get('/debug-prompt', (req, res) => {
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.send(currentPrompt);
+});
+
+// Rota para debug detalhado do prompt
+app.get('/debug-prompt-detailed', (req, res) => {
+  const promptInfo = {
+    length: currentPrompt.length,
+    first100Chars: currentPrompt.substring(0, 100),
+    last100Chars: currentPrompt.substring(currentPrompt.length - 100),
+    hash: lastPromptHash,
+    lastUpdate: lastPromptUpdate,
+    errorCount: promptErrorCount,
+    source: promptErrorCount >= 3 ? 'DEFAULT' : 'PHP'
+  };
+  
+  res.json(promptInfo);
+});
+
+// Rota para forçar recarregamento e mostrar diferenças
+app.get('/force-reload-prompt', async (req, res) => {
+  try {
+    const oldPrompt = currentPrompt;
+    const oldHash = lastPromptHash;
+    
+    console.log('🔄 FORÇANDO recarregamento do prompt...');
+    const newPrompt = await loadPromptFromPHP();
+    
+    if (newPrompt && newPrompt.trim().length > 0) {
+      const newHash = calculatePromptHash(newPrompt);
+      
+      const changed = newHash !== oldHash;
+      
+      currentPrompt = newPrompt;
+      lastPromptHash = newHash;
+      lastPromptUpdate = new Date();
+      promptErrorCount = 0;
+      
+      res.json({
+        success: true,
+        changed: changed,
+        oldLength: oldPrompt.length,
+        newLength: newPrompt.length,
+        oldHash: oldHash,
+        newHash: newHash,
+        message: changed ? '✅ Prompt foi atualizado!' : 'ℹ️  Prompt não mudou',
+        preview: {
+          old: oldPrompt.substring(0, 200) + '...',
+          new: newPrompt.substring(0, 200) + '...'
+        }
+      });
+    } else {
+      throw new Error('Prompt vazio retornado do servidor');
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Rota para testar conexão com o PHP
+app.get('/test-php-connection', async (req, res) => {
+  try {
+    console.log('🧪 Testando conexão com PHP...');
+    const startTime = Date.now();
+    const prompt = await loadPromptFromPHP();
+    const endTime = Date.now();
+    
+    res.json({
+      success: true,
+      connectionTime: `${endTime - startTime}ms`,
+      promptLength: prompt.length,
+      first200Chars: prompt.substring(0, 200),
+      phpUrl: PROMPT_API_URL,
+      token: PROMPT_API_TOKEN ? '***' + PROMPT_API_TOKEN.slice(-4) : 'NONE'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      phpUrl: PROMPT_API_URL,
+      token: PROMPT_API_TOKEN ? '***' + PROMPT_API_TOKEN.slice(-4) : 'NONE'
+    });
+  }
+});
+
+// ========== FIM DAS NOVAS ROTAS ==========
+
 // Rota para visualizar conversas
 app.get('/conversations', async (req, res) => {
   if (!mysqlEnabled || !pool) {
@@ -584,7 +678,7 @@ app.get('/conversations', async (req, res) => {
   }
 });
 
-// Rota para status do banco, APIs e prompt
+// Rota para status do banco, APIs e prompt (ATUALIZADA)
 app.get('/status', async (req, res) => {
   try {
     let dbStatus = 'disabled';
@@ -612,18 +706,29 @@ app.get('/status', async (req, res) => {
       prompt: {
         length: currentPrompt.length,
         lastUpdate: lastPromptUpdate,
-        source: 'PHP API',
+        source: promptErrorCount >= 3 ? 'DEFAULT' : 'PHP',
         errorCount: promptErrorCount,
-        hash: lastPromptHash
+        hash: lastPromptHash,
+        first50Chars: currentPrompt.substring(0, 50) + '...'
       },
       apis: {
         total: API_KEYS.length,
         current: currentApiIndex,
         statistics: apiStats
       },
+      php: {
+        url: PROMPT_API_URL,
+        tokenConfigured: !!PROMPT_API_TOKEN
+      },
       model: model,
       timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()) + ' segundos'
+      uptime: Math.floor(process.uptime()) + ' segundos',
+      debugEndpoints: {
+        promptText: '/debug-prompt',
+        promptDetailed: '/debug-prompt-detailed',
+        forceReload: '/force-reload-prompt',
+        testPHP: '/test-php-connection'
+      }
     });
   } catch (error) {
     res.status(500).json({ 
@@ -759,7 +864,11 @@ app.get('/', (req, res) => {
       'reload-prompt': 'POST /reload-prompt',
       'current-prompt': 'GET /current-prompt',
       'rotate-api': 'POST /rotate-api',
-      conversations: 'GET /conversations (admin)'
+      conversations: 'GET /conversations (admin)',
+      'debug-prompt': 'GET /debug-prompt (texto puro)',
+      'debug-prompt-detailed': 'GET /debug-prompt-detailed (JSON)',
+      'force-reload-prompt': 'GET /force-reload-prompt',
+      'test-php-connection': 'GET /test-php-connection'
     }
   });
 });
@@ -802,6 +911,12 @@ async function startServer() {
     console.log(`   ✅ Sistema de hash para detectar mudanças`);
     console.log(`   ✅ Rotacionamento automático em rate limit`);
     console.log(`   ✅ Histórico de conversas com MySQL`);
+    
+    console.log('\n🔧 ROTAS DE DEBUG:');
+    console.log(`   📝 GET /debug-prompt - Mostra o prompt atual em texto puro`);
+    console.log(`   🔍 GET /debug-prompt-detailed - Informações detalhadas do prompt`);
+    console.log(`   🔄 GET /force-reload-prompt - Força recarregamento e mostra diferenças`);
+    console.log(`   🧪 GET /test-php-connection - Testa conexão com PHP`);
     
     if (mysqlEnabled) {
       console.log('💬 Pronto para receber mensagens com histórico de contexto!');
