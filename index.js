@@ -1,20 +1,21 @@
 const express = require('express');
 const OpenAI = require('openai');
 const mysql = require('mysql2/promise');
+const fetch = require('node-fetch'); // Adicione esta linha
 
 const app = express();
 app.use(express.json());
 
 // Configurações das APIs - múltiplas chaves
 const API_KEYS = [
-  process.env.GITHUB_TOKEN_1,  // Sua primeira chave
-  process.env.GITHUB_TOKEN_2,  // Sua segunda chave
-  process.env.GITHUB_TOKEN_3,  // Terceira chave (opcional)
-  process.env.GITHUB_TOKEN_4,  // Quarta chave (opcional)
-].filter(Boolean); // Remove chaves vazias
+  process.env.GITHUB_TOKEN_1,
+  process.env.GITHUB_TOKEN_2,
+  process.env.GITHUB_TOKEN_3,
+  process.env.GITHUB_TOKEN_4,
+].filter(Boolean);
 
 const endpoint = "https://models.github.ai/inference";
-const model = "openai/gpt-4.1"; // Mantemos apenas o modelo 4.1
+const model = "openai/gpt-4.1";
 
 // Sistema de rotacionamento de APIs
 let currentApiIndex = 0;
@@ -62,7 +63,6 @@ const dbConfig = parseMySQLString(MYSQL_CONNECTION_STRING) || {
 // Verifica se há pelo menos uma chave API disponível
 if (API_KEYS.length === 0) {
   console.error("ERRO: Nenhuma GITHUB_TOKEN encontrada nas variáveis de ambiente");
-  console.error("Configure GITHUB_TOKEN_1, GITHUB_TOKEN_2, etc.");
   process.exit(1);
 }
 
@@ -82,7 +82,6 @@ function rotateToNextApi() {
   const oldIndex = currentApiIndex;
   currentApiIndex = (currentApiIndex + 1) % API_KEYS.length;
   
-  // Registrar o rate limit na API antiga
   if (!rateLimitStats[oldIndex]) {
     rateLimitStats[oldIndex] = { rateLimitedAt: new Date() };
   } else {
@@ -90,8 +89,6 @@ function rotateToNextApi() {
   }
   
   console.log(`🔄 Rotacionando API: ${oldIndex} → ${currentApiIndex}`);
-  console.log(`📊 Estatísticas: ${Object.keys(rateLimitStats).length} APIs com rate limit`);
-  
   return getCurrentClient();
 }
 
@@ -119,23 +116,17 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
     } catch (error) {
       lastError = error;
       
-      // Verificar se é rate limit
       if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
         console.log(`⏰ Rate limit na API ${currentTokenIndex}: ${error.message}`);
-        
-        // Rotacionar para próxima API
         rotateToNextApi();
         
-        // Se ainda temos tentativas, continuar
         if (attempt < maxRetries - 1) {
           console.log(`🔄 Tentando próxima API...`);
           continue;
         }
       } else {
-        // Outro tipo de erro
         console.error(`❌ Erro na API ${currentTokenIndex}:`, error.message);
         
-        // Para erros não relacionados a rate limit, podemos tentar outra API
         if (attempt < maxRetries - 1) {
           console.log(`🔄 Tentando próxima API devido a erro...`);
           rotateToNextApi();
@@ -145,7 +136,6 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
     }
   }
   
-  // Se chegou aqui, todas as APIs falharam
   throw lastError || new Error('Todas as APIs falharam');
 }
 
@@ -169,26 +159,61 @@ async function testMySQLConnection() {
     return true;
   } catch (error) {
     console.error('❌ Teste de conexão MySQL falhou:', error.message);
-    console.error('📋 Código do erro:', error.code);
     return false;
+  }
+}
+
+// Função para gerar messages a partir do PHP - CORRIGIDA
+async function gerarMessages(senderName, groupName, history) {
+  try {
+    console.log('🌐 Buscando configurações do PHP...');
+    const res = await fetch("https://msapp.rf.gd/prompt.php");
+    const config = await res.json();
+
+    let content = config.basePrompt + "\n\n";
+
+    if (config.includeUserInfo) {
+      content += groupName ? `Estamos no grupo "${groupName}".\n` : `Conversando com ${senderName}.\n`;
+    }
+
+    if (config.includeHistory && history.length > 0) {
+      content += `Esta conversa tem ${history.length} mensagens de histórico.\n`;
+    }
+
+    if (config.customInstructions) {
+      content += config.customInstructions;
+    }
+
+    const messages = [{ role: config.role, content: content.trim() }];
+    
+    console.log("✅ Configurações carregadas do PHP");
+    console.log("📝 Mensagem do sistema:", messages[0].content.substring(0, 100) + "...");
+    
+    return messages;
+  } catch (error) {
+    console.error('❌ Erro ao carregar configurações do PHP:', error);
+    // Fallback caso o PHP não esteja disponível
+    const fallbackMessages = [
+      {
+        role: "system",
+        content: `Você é um atendente útil e prestativo.
+${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
+${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
+      }
+    ];
+    return fallbackMessages;
   }
 }
 
 async function initializeDatabase() {
   console.log('🔄 Inicializando MySQL para Railway...');
   
-  // Verifica se as configurações estão definidas
   if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
-    console.log('🚫 Configurações do MySQL incompletas:');
-    console.log(`   Host: ${dbConfig.host}`);
-    console.log(`   User: ${dbConfig.user}`);
-    console.log(`   Database: ${dbConfig.database}`);
-    console.log(`   Password: ${dbConfig.password ? '***' : 'AUSENTE'}`);
+    console.log('🚫 Configurações do MySQL incompletas');
     mysqlEnabled = false;
     return;
   }
 
-  // Testa conexão básica primeiro
   const connectionTest = await testMySQLConnection();
   if (!connectionTest) {
     console.log('🚫 MySQL desabilitado - não foi possível conectar');
@@ -206,12 +231,9 @@ async function initializeDatabase() {
       timeout: 10000,
     });
 
-    // Testa a conexão do pool
     const connection = await pool.getConnection();
     console.log('✅ Pool MySQL conectado com sucesso');
     
-    // Cria a tabela se não existir (versão simplificada)
-    console.log('🔄 Verificando/Criando tabela conversations...');
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS conversations (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -228,8 +250,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Tabela conversations verificada/criada');
     
-    // Testa inserção e leitura
-    console.log('🔄 Testando inserção e leitura...');
     const testSessionId = 'test_session_' + Date.now();
     const [insertResult] = await connection.execute(
       `INSERT INTO conversations (session_id, sender_name, sender_message, ai_response) VALUES (?, ?, ?, ?)`,
@@ -243,11 +263,7 @@ async function initializeDatabase() {
     
     if (selectResult.length > 0) {
       console.log('✅ Teste de inserção/leitura: OK');
-      
-      // Limpa teste
       await connection.execute(`DELETE FROM conversations WHERE id = ?`, [insertResult.insertId]);
-    } else {
-      console.error('❌ Teste de inserção/leitura falhou');
     }
     
     connection.release();
@@ -256,7 +272,6 @@ async function initializeDatabase() {
     
   } catch (error) {
     console.error('❌ Erro na inicialização do MySQL:', error.message);
-    console.error('📋 Código do erro:', error.code);
     mysqlEnabled = false;
     
     if (pool) {
@@ -331,14 +346,13 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
     console.log(`📚 Buscando histórico para sessão: ${sessionId}`);
     
-    // CORREÇÃO: Usar template string para LIMIT em vez de parâmetro
     const safeLimit = parseInt(limit);
     const [rows] = await pool.execute(
       `SELECT sender_message, ai_response, created_at 
        FROM conversations 
        WHERE session_id = ? 
        ORDER BY created_at DESC 
-       LIMIT ${safeLimit}`,  // LIMIT fixo na query, não como parâmetro
+       LIMIT ${safeLimit}`,
       [sessionId]
     );
     
@@ -347,7 +361,6 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
   } catch (error) {
     console.error('❌ Erro ao buscar histórico:', error.message);
-    console.error('📋 Código do erro:', error.code);
     return [];
   }
 }
@@ -359,7 +372,6 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   try {
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     
-    // Método alternativo mais simples
     const [recentIds] = await pool.execute(
       `SELECT id FROM conversations 
        WHERE session_id = ? 
@@ -385,7 +397,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Webhook principal
+// Webhook principal - CORRIGIDO
 app.post('/webhook', async (req, res) => {
   try {
     const {
@@ -404,30 +416,8 @@ app.post('/webhook', async (req, res) => {
     // Busca histórico recente da conversa
     const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
     
-    // Prepara o contexto com histórico
-    async function gerarResposta(senderName, groupName, history) {
-  const res = await fetch("https://msapp.rf.gd/prompt.php");
-  const config = await res.json();
-
-  let content = config.basePrompt + "\n\n";
-
-  if (config.includeUserInfo) {
-    content += groupName ? `Estamos no grupo "${groupName}".\n` : `Conversando com ${senderName}.\n`;
-  }
-
-  if (config.includeHistory && history.length > 0) {
-    content += `Esta conversa tem ${history.length} mensagens de histórico.\n`;
-  }
-
-  if (config.customInstructions) {
-    content += config.customInstructions;
-  }
-
-  const messages = [{ role: config.role, content: content.trim() }];
-  
-  console.log("Configurações carregadas:", config);
-  console.log("Mensagem final:", messages[0].content);
-}
+    // Gera as messages a partir do PHP - CORREÇÃO AQUI
+    let messages = await gerarMessages(senderName, groupName, history);
 
     // Adiciona histórico ao contexto
     history.forEach(conv => {
@@ -440,7 +430,7 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`🤖 Processando com ${messages.length} mensagens de contexto (${history.length} do histórico)`);
 
-    // Processa a mensagem com a IA (com fallback para múltiplas APIs)
+    // Processa a mensagem com a IA
     const response = await callAIWithFallback(messages);
 
     const aiResponse = response.choices[0].message.content;
@@ -472,7 +462,6 @@ app.post('/webhook', async (req, res) => {
   } catch (error) {
     console.error('❌ Erro ao processar mensagem:', error);
     
-    // Mensagem de erro mais específica
     let errorMessage = "Desculpe, estou tendo problemas técnicos. Tente novamente!";
     
     if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
@@ -487,7 +476,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Rota para visualizar conversas
+// Rotas restantes (mantidas iguais)
 app.get('/conversations', async (req, res) => {
   if (!mysqlEnabled || !pool) {
     return res.status(500).json({ 
@@ -514,7 +503,6 @@ app.get('/conversations', async (req, res) => {
   }
 });
 
-// Rota para status do banco e APIs
 app.get('/status', async (req, res) => {
   try {
     let dbStatus = 'disabled';
@@ -527,7 +515,6 @@ app.get('/status', async (req, res) => {
       }
     }
 
-    // Estatísticas das APIs
     const apiStats = API_KEYS.map((_, index) => ({
       index,
       isCurrent: index === currentApiIndex,
@@ -556,7 +543,6 @@ app.get('/status', async (req, res) => {
   }
 });
 
-// Rota para forçar rotação de API
 app.post('/rotate-api', (req, res) => {
   const oldIndex = currentApiIndex;
   rotateToNextApi();
@@ -569,7 +555,6 @@ app.post('/rotate-api', (req, res) => {
   });
 });
 
-// Rota específica para uptime monitoring
 app.get('/ping', (req, res) => {
   res.status(200).json({
     status: 'OK',
@@ -584,7 +569,6 @@ app.get('/ping', (req, res) => {
   });
 });
 
-// Rota de health check
 app.get('/health', async (req, res) => {
   try {
     let dbStatus = 'disabled';
@@ -617,7 +601,6 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Rota raiz
 app.get('/', (req, res) => {
   res.json({ 
     service: 'AutoReply Webhook com Multi-API + MySQL',
@@ -668,6 +651,7 @@ async function startServer() {
     console.log(`   ✅ Rotacionamento automático em rate limit`);
     console.log(`   ✅ Fallback para próxima API`);
     console.log(`   ✅ Estatísticas de uso`);
+    console.log(`   ✅ Prompt dinâmico via PHP`);
     
     if (mysqlEnabled) {
       console.log('\n💬 Pronto para receber mensagens com histórico de contexto!');
