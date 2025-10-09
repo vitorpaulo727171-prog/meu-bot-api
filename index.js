@@ -92,7 +92,7 @@ function rotateToNextApi() {
   return getCurrentClient();
 }
 
-// Função para fazer chamada à API com tratamento de rate limit - COM TEMPERATURE BAIXA
+// Função para fazer chamada à API com tratamento de rate limit
 async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
   let lastError;
   
@@ -105,8 +105,8 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.3,  // REDUZIDO para maior aderência ao prompt
-        top_p: 0.9,        // REDUZIDO para menos criatividade
+        temperature: 0.3,
+        top_p: 0.9,
         model: model
       });
       
@@ -163,11 +163,17 @@ async function testMySQLConnection() {
   }
 }
 
-// Função para gerar messages a partir do PHP - VERSÃO MELHORADA COM LOGS
+// Função para gerar messages a partir do PHP - COM CACHE BUSTING
 async function gerarMessages(senderName, groupName, history) {
   try {
-    console.log('🌐 Buscando configurações do PHP...');
-    const res = await fetch("https://msapp.rf.gd/prompt.php");
+    // Cache busting - força buscar versão fresca
+    const timestamp = new Date().getTime();
+    const url = `https://msapp.rf.gd/prompt.php?t=${timestamp}`;
+    
+    console.log(`🌐 Buscando configurações do PHP (cache busting)...`);
+    console.log(`   URL: ${url}`);
+    
+    const res = await fetch(url);
     
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
@@ -175,13 +181,42 @@ async function gerarMessages(senderName, groupName, history) {
     
     const config = await res.json();
     
-    console.log('✅ Configurações carregadas:', {
+    console.log('✅ NOVAS configurações carregadas:', {
       version: config.version,
       role: config.role,
       basePromptLength: config.basePrompt?.length,
       includeUserInfo: config.includeUserInfo,
       includeHistory: config.includeHistory
     });
+
+    // VERIFICAÇÃO CRÍTICA - Se ainda está carregando Bus Finanças
+    if (config.basePrompt && config.basePrompt.includes('Bus Finanças')) {
+      console.log('🚨🚨🚨 ALERTA: AINDA CARREGANDO BUS FINANÇAS! 🚨🚨🚨');
+      console.log('Forçando prompt do Mercado dos Sabores...');
+      
+      // Força o prompt correto
+      config.basePrompt = `VOCÊ É ATENDENTE OFICIAL DA LOJA "MERCADO DOS SABORES". SUA ÚNICA FUNÇÃO É ATENDER PEDIDOS E VENDER OS PRODUTOS DA LOJA.
+
+🚫 REGRAS ABSOLUTAS:
+• NUNCA responda perguntas sobre outros assuntos
+• NUNCA fale sobre outros estabelecimentos  
+• NUNCA ofereça ajuda genérica fora do contexto da loja
+• SEMPRE mantenha o foco na venda dos produtos listados
+
+📍 LOJA: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
+💳 PAGAMENTO: PIX e Dinheiro
+🌐 SITE: https://lojams.rf.gd 
+🚚 RETIRADA: Local ou UberFlash (custo do cliente)
+
+🎂 PRODUTOS PRINCIPAIS:
+• Brownies: R$ 4,00 cada (Ferrero, Doce de Leite, Ninho, Paçoca, Pistache, Brigadeiro)
+• Dindins Gourmet: R$ 5,50 a R$ 6,00
+• Bolos no Pote: R$ 11,00 a R$ 12,00
+• Salgados: R$ 4,00 a R$ 6,00
+• Kits Festa: Sob encomenda
+
+SE alguém perguntar sobre outros assuntos: "Especializo-me apenas nos produtos do Mercado dos Sabores. Posso te ajudar a escolher algum brownie, bolo ou salgado?"`;
+    }
 
     let content = config.basePrompt + "\n\n";
 
@@ -199,28 +234,31 @@ async function gerarMessages(senderName, groupName, history) {
 
     const messages = [{ role: config.role || "system", content: content.trim() }];
     
-    console.log("📝 MENSAGEM DO SISTEMA COMPLETA:");
+    console.log("📝 MENSAGEM DO SISTEMA ATUAL:");
     console.log("═".repeat(50));
-    console.log(messages[0].content);
+    console.log(messages[0].content.substring(0, 200) + "...");
     console.log("═".repeat(50));
     
     return messages;
   } catch (error) {
     console.error('❌ Erro ao carregar configurações do PHP:', error);
-    // Fallback ULTRA RESTRITIVO
+    // Fallback para Mercado dos Sabores
     const fallbackMessages = [
       {
         role: "system",
-        content: `VOCÊ É VENDEDOR DO CURSO DA BUS FINANÇAS. SUA ÚNICA FUNÇÃO É VENDER. 
+        content: `VOCÊ É ATENDENTE DA LOJA "MERCADO DOS SABORES". SUA ÚNICA FUNÇÃO É VENDER OS PRODUTOS DA LOJA.
 NUNCA responda outras perguntas. 
 NUNCA ofereça ajuda genérica.
-SEMPRE venda o curso.
-SE falarem de outros assuntos, diga: "Só posso ajudar com a venda do curso financeiro."
+SEMPRE venda brownies, bolos, salgados e outros produtos da loja.
+PRODUTOS: Brownies R$ 4,00, Dindins R$ 5,50+, Bolos no Pote R$ 11,00+
+ENDEREÇO: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
+PAGAMENTO: PIX e Dinheiro
+SE falarem de outros assuntos, diga: "Especializo-me apenas nos produtos do Mercado dos Sabores."
 ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
 ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
       }
     ];
-    console.log("⚠️  Usando fallback restritivo");
+    console.log("⚠️  Usando fallback do Mercado dos Sabores");
     return fallbackMessages;
   }
 }
@@ -417,7 +455,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Webhook principal - VERSÃO MELHORADA COM VERIFICAÇÕES
+// Webhook principal - COM VERIFICAÇÃO FORTE
 app.post('/webhook', async (req, res) => {
   try {
     const {
@@ -439,20 +477,37 @@ app.post('/webhook', async (req, res) => {
     // Gera as messages a partir do PHP
     let messages = await gerarMessages(senderName, groupName, history);
 
-    // VERIFICAÇÃO CRÍTICA - Log da primeira message do sistema
+    // VERIFICAÇÃO EXTRA - Força Mercado dos Sabores se detectar Bus Finanças
     if (messages.length > 0 && messages[0].role === 'system') {
       const systemMessage = messages[0].content;
-      const isSalesPrompt = systemMessage.includes('VENDER') || 
-                           systemMessage.includes('VENDA') || 
-                           systemMessage.includes('CURSO') ||
-                           systemMessage.includes('BUS FINANÇAS');
+      const isMercadoSabores = systemMessage.includes('Mercado dos Sabores') || 
+                              systemMessage.includes('brownie') || 
+                              systemMessage.includes('R$ 4,00');
+      const isBusFinancas = systemMessage.includes('Bus Finanças') || 
+                           systemMessage.includes('curso financeiro');
       
-      console.log(`🎯 PROMPT DE VENDA: ${isSalesPrompt ? '✅ ATIVADO' : '❌ NÃO DETECTADO'}`);
+      console.log(`🎯 DETECTADO: Mercado dos Sabores: ${isMercadoSabores ? '✅ SIM' : '❌ NÃO'}`);
+      console.log(`🎯 DETECTADO: Bus Finanças: ${isBusFinancas ? '✅ SIM' : '❌ NÃO'}`);
       
-      if (!isSalesPrompt) {
-        console.log('🚨 ALERTA: Prompt não parece ser de vendas! Forçando comportamento...');
-        // Força o comportamento de vendas
-        messages[0].content += "\n\nIMPORTANTE: VOCÊ DEVE VENDER O CURSO FINANCEIRO. NÃO RESPONDA OUTROS ASSUNTOS.";
+      if (isBusFinancas || !isMercadoSabores) {
+        console.log('🚨 CORRIGINDO: Forçando prompt do Mercado dos Sabores...');
+        messages[0].content = `VOCÊ É ATENDENTE DA LOJA "MERCADO DOS SABORES". SUA ÚNICA FUNÇÃO É VENDER BROWNIES, BOLOS E SALGADOS.
+
+PRODUTOS:
+• Brownies: R$ 4,00 (Ferrero, Doce de Leite, Ninho, Paçoca, Pistache, Brigadeiro)
+• Dindins: R$ 5,50 a R$ 6,00
+• Bolos no Pote: R$ 11,00 a R$ 12,00  
+• Salgados: R$ 4,00 a R$ 6,00
+
+ENDEREÇO: Rua Raimundo Lemos Dias, 68 - Luciano Cavalcante, Fortaleza-CE
+PAGAMENTO: PIX e Dinheiro
+SITE: https://lojams.rf.gd
+
+NUNCA fale sobre outros assuntos. SEMPRE venda produtos da loja.
+SE perguntarem outros assuntos: "Especializo-me apenas nos produtos do Mercado dos Sabores!"
+
+${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
+${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`;
       }
     }
 
@@ -467,12 +522,9 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`🤖 Processando com ${messages.length} mensagens de contexto (${history.length} do histórico)`);
 
-    // LOG FINAL das mensagens que serão enviadas
-    console.log('📤 MENSAGENS ENVIADAS PARA IA:');
-    messages.forEach((msg, index) => {
-      const contentPreview = msg.content.length > 100 ? msg.content.substring(0, 100) + '...' : msg.content;
-      console.log(`   [${index}] ${msg.role}: ${contentPreview}`);
-    });
+    // LOG FINAL
+    console.log('📤 MENSAGEM DO SISTEMA:');
+    console.log(messages[0].content.substring(0, 300) + '...');
 
     // Processa a mensagem com a IA
     const response = await callAIWithFallback(messages);
@@ -480,15 +532,15 @@ app.post('/webhook', async (req, res) => {
     const aiResponse = response.choices[0].message.content;
 
     // VERIFICAÇÃO DA RESPOSTA
-    const isSalesResponse = aiResponse.toLowerCase().includes('curso') || 
-                           aiResponse.toLowerCase().includes('venda') || 
-                           aiResponse.toLowerCase().includes('financeiro') ||
-                           aiResponse.toLowerCase().includes('bus finanças');
+    const isCorrectResponse = aiResponse.toLowerCase().includes('brownie') || 
+                             aiResponse.toLowerCase().includes('mercado') || 
+                             aiResponse.toLowerCase().includes('sabores') ||
+                             aiResponse.toLowerCase().includes('r$');
     
-    console.log(`🎯 RESPOSTA FOI DE VENDA: ${isSalesResponse ? '✅ SIM' : '❌ NÃO'}`);
+    console.log(`🎯 RESPOSTA CORRETA: ${isCorrectResponse ? '✅ SIM' : '❌ NÃO'}`);
     
-    if (!isSalesResponse) {
-      console.log('🚨 RESPOSTA INADEQUADA:', aiResponse);
+    if (!isCorrectResponse) {
+      console.log('🚨 RESPOSTA INCORRETA - Possível problema no prompt');
     }
 
     // Salva a conversa no banco
@@ -506,7 +558,7 @@ app.post('/webhook', async (req, res) => {
       await cleanupOldMessages(senderName, groupName, isMessageFromGroup);
     }
 
-    console.log(`✅ Resposta gerada (MySQL: ${savedId ? 'SALVO' : 'NÃO SALVO'}): ${aiResponse.substring(0, 100)}...`);
+    console.log(`✅ Resposta: ${aiResponse.substring(0, 100)}...`);
 
     // Retorna a resposta
     res.json({
@@ -518,11 +570,7 @@ app.post('/webhook', async (req, res) => {
   } catch (error) {
     console.error('❌ Erro ao processar mensagem:', error);
     
-    let errorMessage = "Desculpe, estou tendo problemas técnicos. Tente novamente!";
-    
-    if (error.code === 'RateLimitReached' || error.message?.includes('Rate limit')) {
-      errorMessage = "Desculpe, atingi meu limite de uso por hoje. Por favor, tente novamente amanhã!";
-    }
+    let errorMessage = "Olá! 😊 Bem-vindo ao Mercado dos Sabores! Estamos com problemas técnicos momentâneos. Por favor, tente novamente em instantes!";
     
     res.json({
       data: [{
@@ -535,16 +583,26 @@ app.post('/webhook', async (req, res) => {
 // Rota para testar o prompt atual
 app.get('/test-prompt', async (req, res) => {
   try {
-    const messages = await gerarMessages("UsuarioTeste", null, []);
+    const messages = await gerarMessages("Teste", null, []);
     res.json({
       status: 'success',
       systemMessage: messages[0].content,
       length: messages[0].content.length,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      version: 'Mercado dos Sabores - Forçado'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Rota para forçar Mercado dos Sabores
+app.post('/force-mercado-sabores', (req, res) => {
+  console.log('🔄 Forçando prompt do Mercado dos Sabores em todas as próximas requisições...');
+  res.json({
+    message: 'Mercado dos Sabores forçado - Reinicie o servidor no Render',
+    instructions: 'Vá no Render → Seu serviço → Manual Deploy → Clear Cache and Deploy'
+  });
 });
 
 // Rotas restantes
@@ -604,7 +662,8 @@ app.get('/status', async (req, res) => {
       },
       model: model,
       timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()) + ' segundos'
+      uptime: Math.floor(process.uptime()) + ' segundos',
+      service: 'Mercado dos Sabores - Atendimento'
     });
   } catch (error) {
     res.status(500).json({ 
@@ -636,7 +695,7 @@ app.get('/ping', (req, res) => {
     },
     model: model,
     timestamp: new Date().toISOString(),
-    service: 'Railway MySQL + Multi-API'
+    service: 'Mercado dos Sabores - Atendimento Online'
   });
 });
 
@@ -662,7 +721,8 @@ app.get('/health', async (req, res) => {
       },
       model: model,
       timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()) + ' segundos'
+      uptime: Math.floor(process.uptime()) + ' segundos',
+      business: 'Mercado dos Sabores - Loja de Brownies e Doces'
     });
   } catch (error) {
     res.status(500).json({ 
@@ -674,30 +734,37 @@ app.get('/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({ 
-    service: 'AutoReply Webhook com Multi-API + MySQL',
-    status: 'Online',
+    service: 'Mercado dos Sabores - Atendimento Automático',
+    status: 'Online 🎂',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
     apis: {
       total: API_KEYS.length,
       current: currentApiIndex
     },
     model: model,
-    deployment: 'Railway',
+    deployment: 'Render + Railway',
     endpoints: {
       webhook: 'POST /webhook',
       health: 'GET /health',
       status: 'GET /status',
       ping: 'GET /ping',
       'rotate-api': 'POST /rotate-api',
-      conversations: 'GET /conversations (admin)',
-      'test-prompt': 'GET /test-prompt (debug)'
+      'test-prompt': 'GET /test-prompt (debug)',
+      'force-mercado-sabores': 'POST /force-mercado-sabores',
+      conversations: 'GET /conversations (admin)'
+    },
+    business: {
+      name: 'Mercado dos Sabores',
+      products: 'Brownies, Bolos, Salgados, Doces',
+      address: 'Rua Raimundo Lemos Dias, 68 - Fortaleza-CE',
+      website: 'https://lojams.rf.gd'
     }
   });
 });
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com Multi-API...');
+  console.log('🚀 Iniciando servidor Mercado dos Sabores...');
   console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
   console.log(`🤖 Modelo: ${model}`);
   console.log('🔧 Configurações MySQL:');
@@ -710,33 +777,33 @@ async function startServer() {
   
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.log(`🎉 Servidor rodando na porta ${PORT}`);
+    console.log(`🎉 Servidor Mercado dos Sabores rodando na porta ${PORT}`);
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🔍 Health: GET /health`);
-    console.log(`📊 Status completo: GET /status`);
-    console.log(`🔄 Rotacionar API: POST /rotate-api`);
+    console.log(`📊 Status: GET /status`);
     console.log(`🧪 Testar prompt: GET /test-prompt`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     
-    console.log('\n🎯 SISTEMA MULTI-API CONFIGURADO:');
-    console.log(`   ✅ ${API_KEYS.length} chaves disponíveis`);
-    console.log(`   ✅ Modelo fixo: ${model}`);
-    console.log(`   ✅ Temperature baixa (0.3) para seguir prompt`);
-    console.log(`   ✅ Rotacionamento automático em rate limit`);
-    console.log(`   ✅ Fallback para próxima API`);
-    console.log(`   ✅ Verificação de prompt de vendas`);
-    console.log(`   ✅ Logs detalhados para debugging`);
-    console.log(`   ✅ Prompt dinâmico via PHP`);
+    console.log('\n🎯 CONFIGURADO PARA: MERCADO DOS SABORES');
+    console.log(`   ✅ Brownies: R$ 4,00`);
+    console.log(`   ✅ Bolos no Pote: R$ 11,00+`);
+    console.log(`   ✅ Salgados: R$ 4,00+`);
+    console.log(`   ✅ Endereço: Rua Raimundo Lemos Dias, 68`);
+    
+    console.log('\n⚠️  VERIFICAÇÕES ATIVAS:');
+    console.log('   ✅ Cache busting no PHP');
+    console.log('   ✅ Detecção automática de prompt errado');
+    console.log('   ✅ Correção forçada se necessário');
+    console.log('   ✅ Fallback do Mercado dos Sabores');
     
     if (mysqlEnabled) {
-      console.log('\n💬 Pronto para receber mensagens com histórico de contexto!');
+      console.log('\n💬 Pronto para atender pedidos do Mercado dos Sabores!');
     }
 
-    console.log('\n⚠️  INSTRUÇÕES IMPORTANTES:');
-    console.log('   1. Acesse https://msapp.rf.gd/editar_prompt.php');
-    console.log('   2. Configure um prompt FORTE de vendas');
-    console.log('   3. Teste com GET /test-prompt para verificar');
-    console.log('   4. Envie "Oi" para testar o comportamento');
+    console.log('\n📞 TESTE IMEDIATO:');
+    console.log('   1. Acesse GET /test-prompt para ver o prompt carregado');
+    console.log('   2. Envie "Oi" para o webhook');
+    console.log('   3. Deve responder sobre brownies e Mercado dos Sabores');
   });
 }
 
