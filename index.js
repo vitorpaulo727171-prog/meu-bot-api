@@ -165,16 +165,37 @@ INSTRUÇÕES PARA ATENDIMENTO:
 let currentPrompt = defaultPrompt;
 let lastPromptUpdate = null;
 let promptErrorCount = 0;
+let lastPromptHash = '';
+
+// Função para calcular hash do prompt (para verificar mudanças)
+function calculatePromptHash(prompt) {
+  let hash = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    const char = prompt.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString();
+}
 
 // Função para inicializar e atualizar o prompt
 async function updatePrompt() {
   try {
     const newPrompt = await loadPromptFromPHP();
     if (newPrompt && newPrompt.trim().length > 0) {
-      currentPrompt = newPrompt;
-      lastPromptUpdate = new Date();
-      promptErrorCount = 0;
-      console.log(`📝 Prompt atualizado - ${currentPrompt.length} caracteres`);
+      const newHash = calculatePromptHash(newPrompt);
+      
+      // Só atualiza se o prompt realmente mudou
+      if (newHash !== lastPromptHash) {
+        currentPrompt = newPrompt;
+        lastPromptHash = newHash;
+        lastPromptUpdate = new Date();
+        promptErrorCount = 0;
+        console.log(`📝 Prompt ATUALIZADO - ${currentPrompt.length} caracteres`);
+        console.log(`🆕 Hash: ${newHash}`);
+      } else {
+        console.log(`📝 Prompt já está atualizado - ${currentPrompt.length} caracteres`);
+      }
     } else {
       throw new Error('Prompt vazio retornado do servidor');
     }
@@ -186,7 +207,18 @@ async function updatePrompt() {
     if (promptErrorCount >= 3) {
       console.log('🔄 Usando prompt padrão devido a erros consecutivos');
       currentPrompt = defaultPrompt;
+      lastPromptHash = calculatePromptHash(defaultPrompt);
     }
+  }
+}
+
+// Função para garantir que o prompt está atualizado antes de processar
+async function ensurePromptUpdated() {
+  try {
+    await updatePrompt();
+  } catch (error) {
+    console.error('❌ Erro ao garantir prompt atualizado:', error.message);
+    // Continua com o prompt atual mesmo em caso de erro
   }
 }
 
@@ -203,7 +235,7 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.7,
+        temperature: 0.3,
         top_p: 1.0,
         model: model
       });
@@ -435,7 +467,7 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
-// Webhook principal
+// Webhook principal - ATUALIZADO: sempre carrega o prompt antes de processar
 app.post('/webhook', async (req, res) => {
   try {
     const {
@@ -450,6 +482,10 @@ app.post('/webhook', async (req, res) => {
     console.log(`📩 Mensagem de ${senderName}${groupName ? ` no grupo ${groupName}` : ''}: ${senderMessage}`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? 'HABILITADO' : 'DESABILITADO'}`);
     console.log(`🔑 API atual: ${currentApiIndex}`);
+
+    // 🔄 ATUALIZAÇÃO CRÍTICA: Sempre verificar e atualizar o prompt antes de processar
+    console.log('🔄 Verificando atualização do prompt...');
+    await ensurePromptUpdated();
     console.log(`📝 Prompt: ${currentPrompt.length} caracteres (atualizado: ${lastPromptUpdate ? lastPromptUpdate.toLocaleTimeString() : 'NUNCA'})`);
 
     // Busca histórico recente da conversa
@@ -577,7 +613,8 @@ app.get('/status', async (req, res) => {
         length: currentPrompt.length,
         lastUpdate: lastPromptUpdate,
         source: 'PHP API',
-        errorCount: promptErrorCount
+        errorCount: promptErrorCount,
+        hash: lastPromptHash
       },
       apis: {
         total: API_KEYS.length,
@@ -604,7 +641,8 @@ app.post('/reload-prompt', async (req, res) => {
       success: true,
       message: 'Prompt recarregado',
       promptLength: currentPrompt.length,
-      lastUpdate: lastPromptUpdate
+      lastUpdate: lastPromptUpdate,
+      hash: lastPromptHash
     });
   } catch (error) {
     res.status(500).json({
@@ -619,7 +657,8 @@ app.get('/current-prompt', (req, res) => {
   res.json({
     prompt: currentPrompt,
     length: currentPrompt.length,
-    lastUpdate: lastPromptUpdate
+    lastUpdate: lastPromptUpdate,
+    hash: lastPromptHash
   });
 });
 
@@ -643,7 +682,8 @@ app.get('/ping', (req, res) => {
     mysql: mysqlEnabled ? 'connected' : 'disabled',
     prompt: {
       loaded: currentPrompt.length > 0,
-      length: currentPrompt.length
+      length: currentPrompt.length,
+      hash: lastPromptHash
     },
     apis: {
       total: API_KEYS.length,
@@ -675,7 +715,8 @@ app.get('/health', async (req, res) => {
       prompt: {
         loaded: currentPrompt.length > 0,
         length: currentPrompt.length,
-        lastUpdate: lastPromptUpdate
+        lastUpdate: lastPromptUpdate,
+        hash: lastPromptHash
       },
       apis: {
         total: API_KEYS.length,
@@ -701,7 +742,8 @@ app.get('/', (req, res) => {
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
     prompt: {
       loaded: currentPrompt.length > 0,
-      length: currentPrompt.length
+      length: currentPrompt.length,
+      lastUpdate: lastPromptUpdate
     },
     apis: {
       total: API_KEYS.length,
@@ -739,9 +781,9 @@ async function startServer() {
   console.log('🔄 Carregando prompt inicial do PHP...');
   await updatePrompt();
   
-  // Configurar atualização periódica do prompt (a cada 5 minutos)
-  setInterval(updatePrompt, 5 * 60 * 1000);
-  console.log('⏰ Atualização automática do prompt configurada (5 minutos)');
+  // Configurar atualização periódica do prompt (a cada 2 minutos - apenas como backup)
+  setInterval(updatePrompt, 2 * 60 * 1000);
+  console.log('⏰ Atualização automática do prompt configurada (2 minutos - backup)');
   
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
@@ -752,10 +794,12 @@ async function startServer() {
     console.log(`🔄 Recarregar prompt: POST /reload-prompt`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     console.log(`📝 Prompt: ${currentPrompt.length} caracteres carregados`);
+    console.log(`🔐 Hash do prompt: ${lastPromptHash}`);
     
     console.log('\n🎯 SISTEMA CONFIGURADO:');
     console.log(`   ✅ ${API_KEYS.length} chaves API`);
-    console.log(`   ✅ Prompt dinâmico via PHP`);
+    console.log(`   ✅ Prompt dinâmico via PHP (ATUALIZAÇÃO A CADA MENSAGEM)`);
+    console.log(`   ✅ Sistema de hash para detectar mudanças`);
     console.log(`   ✅ Rotacionamento automático em rate limit`);
     console.log(`   ✅ Histórico de conversas com MySQL`);
     
