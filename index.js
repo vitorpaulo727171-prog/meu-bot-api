@@ -406,7 +406,7 @@ app.post('/webhook', async (req, res) => {
     
     // Prepara o contexto com histórico
     async function gerarResposta(senderName, groupName, history) {
-  const res = await fetch("https://lojams.rf.gd/prompt.php");
+  const res = await fetch("https://msapp.rf.gd/prompt.php");
   const config = await res.json();
 
   let content = config.basePrompt + "\n\n";
