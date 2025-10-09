@@ -108,7 +108,7 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
       
       const response = await client.chat.completions.create({
         messages: messages,
-        temperature: 0.7,
+        temperature: 0.3,
         top_p: 1.0,
         model: model
       });
