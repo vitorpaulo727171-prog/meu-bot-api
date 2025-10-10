@@ -431,6 +431,7 @@ Voce SEMPRE devera dizer quando tentarem comprar um produto que nao esta dispon�
 • Atendimento humanizado: Sabrina - Celular: 85991665141
 • Endereço: Rua Raimundo Lemos Dias, 68 – Luciano Cavalcante, Fortaleza–CE
 • Pagamento: PIX 💳 ou Dinheiro 💵
+• Pix Celular: (85) 9 91665141 - Banco Inter - Sabrina Angela 
 • encomenda: A loja tem 2 dias úteis para entregar a encomenda.
 • Retirada: Local ou UberFlash (custo do cliente)
 • Site: https://lojams.rf.gd
@@ -523,6 +524,7 @@ Valor total: R$ [valor]
 Forma de pagamento: [PIX ou Dinheiro]  
 Entrega: Retirada Local  
 Tempo de preparo: 25 a 40 minutos
+Data de retirada: (Caso seja encomenda. Data informada pelo cliente)
 
 4. PRODUTOS INDISPONÍVEIS:
 Nunca diga apenas "acabou".
