@@ -436,13 +436,7 @@ Você deverá mandar o atendimento humanizado sempre quando o cliente solicitar.
 
 ---
 
-${prontaEntregaProducts || `📦 PRODUTOS DISPONÍVEIS – PRONTA ENTREGA
-
-🎂 BROWNIE BRIGADEIRO
-• Descrição: Brownie clássico com recheio de brigadeiro 50% cacau, casquinha crocante e interior molhadinho
-• Preço: R$ 4,50 cada
-• Estoque: 2 unidades
-• Disponibilidade: ✅ Pronta Entrega`}
+${prontaEntregaProducts}
 
 ---
 
