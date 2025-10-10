@@ -504,7 +504,7 @@ ${prontaEntregaProducts}
 
 1. SAUDAÇÃO INICIAL:
 "Olá, (user)! 👋 Bem-vindo ao Mercado dos Sabores! 😊 Temos brownies, bolos, salgados e muito mais. Do que você está com vontade hoje?"
-Sempre quando perguntarem o que tem mostrar os protudos a pronta entrega.
+
 
 2. AO RECEBER PEDIDO:
 Confirme produto, quantidade e valor total
