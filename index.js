@@ -158,6 +158,32 @@ async function testMySQLConnection() {
   }
 }
 
+// Função para manter o MySQL ativo
+async function keepMySQLAlive() {
+  if (!mysqlEnabled || !pool) {
+    console.log('⚠️  MySQL não disponível para keep-alive');
+    return false;
+  }
+
+  try {
+    const [rows] = await pool.execute('SELECT 1 as keep_alive');
+    console.log('✅ Keep-alive MySQL executado com sucesso');
+    return true;
+  } catch (error) {
+    console.error('❌ Erro no keep-alive MySQL:', error.message);
+    
+    // Tentar reconectar se houver erro
+    try {
+      console.log('🔄 Tentando reconectar ao MySQL...');
+      await initializeDatabase();
+    } catch (reconnectError) {
+      console.error('❌ Falha na reconexão MySQL:', reconnectError.message);
+    }
+    
+    return false;
+  }
+}
+
 // Função para buscar produtos de pronta entrega
 async function getProntaEntregaProducts() {
   if (!mysqlEnabled || !pool) {
@@ -754,26 +780,47 @@ app.post('/rotate-api', (req, res) => {
   });
 });
 
-app.get('/ping', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    mysql: mysqlEnabled ? 'connected' : 'disabled',
-    apis: { total: API_KEYS.length, current: currentApiIndex },
-    model: model,
-    timestamp: new Date().toISOString(),
-    service: 'Railway MySQL + Multi-API'
-  });
+// ROTA PING MODIFICADA - Agora mantém o MySQL ativo
+app.get('/ping', async (req, res) => {
+  try {
+    // Executa keep-alive do MySQL se estiver disponível
+    let mysqlAlive = false;
+    if (mysqlEnabled && pool) {
+      mysqlAlive = await keepMySQLAlive();
+    }
+
+    res.status(200).json({
+      status: 'OK',
+      mysql: mysqlEnabled ? (mysqlAlive ? 'connected' : 'error') : 'disabled',
+      apis: { total: API_KEYS.length, current: currentApiIndex },
+      model: model,
+      timestamp: new Date().toISOString(),
+      service: 'Railway MySQL + Multi-API',
+      mysql_keep_alive: mysqlAlive
+    });
+  } catch (error) {
+    console.error('❌ Erro na rota /ping:', error);
+    res.status(500).json({ 
+      status: 'Error', 
+      message: 'Service ping failed',
+      mysql_keep_alive: false
+    });
+  }
 });
 
 app.get('/health', async (req, res) => {
   try {
     let dbStatus = 'disabled';
+    let mysqlAlive = false;
+    
     if (mysqlEnabled && pool) {
       try {
         await pool.execute('SELECT 1');
         dbStatus = 'connected';
+        mysqlAlive = true;
       } catch (error) {
         dbStatus = 'error';
+        mysqlAlive = false;
       }
     }
 
@@ -781,13 +828,18 @@ app.get('/health', async (req, res) => {
       status: 'OK', 
       database: dbStatus,
       mysqlEnabled: mysqlEnabled,
+      mysql_alive: mysqlAlive,
       apis: { total: API_KEYS.length, current: currentApiIndex },
       model: model,
       timestamp: new Date().toISOString(),
       uptime: Math.floor(process.uptime()) + ' segundos'
     });
   } catch (error) {
-    res.status(500).json({ status: 'Error', message: 'Service unhealthy' });
+    res.status(500).json({ 
+      status: 'Error', 
+      message: 'Service unhealthy',
+      mysql_alive: false
+    });
   }
 });
 
@@ -803,11 +855,12 @@ app.get('/', (req, res) => {
       webhook: 'POST /webhook',
       health: 'GET /health',
       status: 'GET /status',
-      ping: 'GET /ping',
+      ping: 'GET /ping (com keep-alive MySQL)',
       'rotate-api': 'POST /rotate-api',
       conversations: 'GET /conversations',
       produtos: 'GET/POST/PUT/DELETE /produtos'
-    }
+    },
+    note: 'A rota /ping agora executa keep-alive do MySQL para evitar que durma no Railway'
   });
 });
 
@@ -825,12 +878,14 @@ async function startServer() {
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🛍️  Gerenciar produtos: GET/POST/PUT/DELETE /produtos`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
+    console.log(`🔋 Keep-alive MySQL: ✅ ATIVO via rota /ping`);
     
     console.log('\n🎯 SISTEMA DE PRODUTOS DINÂMICOS CONFIGURADO:');
     console.log(`   ✅ Tabela produtos_pronta_entrega criada/verificada`);
     console.log(`   ✅ Consulta automática a cada mensagem`);
     console.log(`   ✅ APIs REST para gerenciamento`);
     console.log(`   ✅ Fallback para produtos padrão se MySQL falhar`);
+    console.log(`   ✅ Sistema keep-alive MySQL para evitar dormência`);
   });
 }
 
