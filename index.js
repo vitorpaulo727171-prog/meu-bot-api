@@ -70,6 +70,8 @@ console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
 // Função para obter data e hora formatadas
 function getCurrentDateTime() {
   const now = new Date();
+
+  now.setTime(now.getTime() - 3 * 60 * 60 * 1000);
   
   // Formato para o Brasil (DD/MM/AAAA HH:MM:SS)
   const day = String(now.getDate()).padStart(2, '0');
