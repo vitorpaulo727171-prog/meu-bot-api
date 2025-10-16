@@ -225,7 +225,7 @@ async function getProntaEntregaProducts() {
 
     let productsString = "📦 PRODUTOS DISPONÍVEIS – PRONTA ENTREGA\n\n";
     rows.forEach(product => {
-      productsString += `🎂 ${product.nome}\n`;
+      productsString += `• ${product.nome}\n`;
       productsString += `• Descrição: ${product.descricao}\n`;
       productsString += `• Preço: R$ ${product.preco} cada\n`;
       productsString += `• Estoque: ${product.estoque} unidades\n`;
@@ -494,6 +494,7 @@ Voce SEMPRE devera dizer quando tentarem comprar um produto que nao esta dispon�
 • Retirada: Local ou UberFlash (custo do cliente)
 • Site: https://lojams.rf.gd
 • Tempo médio de preparo: ⏱️ 25 a 40 minutos
+• Horario: Segunda a Sexta: 10:30 - 18:30 / Sabado: 10:30 - 16:30 / Domingo: Fechado
 
 ---
 
@@ -504,13 +505,13 @@ ${prontaEntregaProducts}
 🛍️ CATÁLOGO COMPLETO
 
 🎂 BROWNIES (R$ 4,50 cada):
-• Brownie Ferrero – Brigadeiro 50% cacau, creme de avelã e amendoim
-• Brownie Doce de Leite – Recheio cremoso de doce de leite
-• Brownie Ninho – Recheio cremoso de leite Ninho
-• Brownie Paçoca – Recheio cremoso de paçoca
-• Brownie Pistache – Casquinha crocante, interior molhadinho
-• Brownie Brigadeiro – Tradicional brigadeiro
-• ⚠️ Brownie Beijinho – INDISPONÍVEL
+• Brownie Ferrero 
+• Brownie Doce de Leite 
+• Brownie Ninho 
+• Brownie Paçoca  
+• Brownie Pistache 
+• Brownie Brigadeiro 
+• ⚠️ Brownie Beijinho 
 
 🍫 DINDINS GOURMET:
 • Oreo – R$ 5,50
@@ -593,7 +594,7 @@ Sempre ofereça substitutos imediatos, ex:
 Sempre feche dizendo:
 "Agradecemos pela preferência! 💛
 Retirada: Rua Raimundo Lemos Dias, 68 – Luciano Cavalcante.
-Site com fotos e novidades: https://lojams.rf.gd"
+Compre tambem pelo nosso site: https://lojams.rf.gd"
 
 ⚙️ TOM E ESTILO DE ATENDIMENTO:
 
