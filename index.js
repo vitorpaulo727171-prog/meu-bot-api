@@ -90,6 +90,13 @@ function getCurrentDateTime() {
   };
 }
 
+// Função para gerar ID do pedido
+function generateOrderId() {
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `MS${timestamp}${random}`;
+}
+
 // Função para obter o cliente atual
 function getCurrentClient() {
   const token = API_KEYS[currentApiIndex];
@@ -276,11 +283,11 @@ function extrairProdutosDoTexto(textoProdutos) {
   return produtos;
 }
 
-// Função para processar pedido
+// Função para processar pedido - VERSÃO MELHORADA
 async function processarPedido(aiResponse, sessionId, senderName, groupName, isMessageFromGroup) {
   try {
-    // Padrões para detectar pedido confirmado
-    const padraoPedido = /✅ PEDIDO CONFIRMADO|PEDIDO CONFIRMADO|pedido confirmado/i;
+    // Padrões para detectar pedido confirmado - mais flexível
+    const padraoPedido = /✅ PEDIDO CONFIRMADO|PEDIDO CONFIRMADO|pedido confirmado|✅ Pedido Confirmado/i;
     
     if (!padraoPedido.test(aiResponse)) {
       return null; // Não é um pedido confirmado
@@ -288,25 +295,67 @@ async function processarPedido(aiResponse, sessionId, senderName, groupName, isM
 
     console.log('🛒 Detectando pedido na resposta da IA...');
 
-    // Extrair informações do pedido usando regex
-    const produtosMatch = aiResponse.match(/Produtos:\s*([^]*?)(?=Valor total|Forma de pagamento|$)/i);
-    const valorMatch = aiResponse.match(/Valor total:\s*R\$\s*([\d,]+)/i);
-    const pagamentoMatch = aiResponse.match(/Forma de pagamento:\s*([^\n]+)/i);
-    const entregaMatch = aiResponse.match(/Entrega:\s*([^\n]+)/i);
-    const observacoesMatch = aiResponse.match(/Observações:\s*([^]*?)(?=$)/i);
+    // Extrair ID do pedido
+    const idMatch = aiResponse.match(/#MS(\w+)|ID.*?(\w+)$/mi);
+    const pedidoId = idMatch ? (idMatch[1] || idMatch[2] || generateOrderId()) : generateOrderId();
 
-    const produtosTexto = produtosMatch ? produtosMatch[1].trim() : '';
-    const valorTotal = valorMatch ? parseFloat(valorMatch[1].replace(',', '.')) : 0;
-    const formaPagamento = pagamentoMatch ? pagamentoMatch[1].trim() : 'PIX';
-    const formaEntrega = entregaMatch ? entregaMatch[1].trim() : 'Retirada Local';
-    const observacoes = observacoesMatch ? observacoesMatch[1].trim() : '';
+    // Tentar extrair informações específicas
+    let produtosTexto = '';
+    let valorTotal = 0;
+    let formaPagamento = 'PIX';
+    let formaEntrega = 'Retirada Local';
+    let observacoes = '';
+
+    // Extrair produtos - método mais flexível
+    const produtosSection = aiResponse.split('Produtos:')[1];
+    if (produtosSection) {
+      const endSection = produtosSection.split('Valor total')[0] || produtosSection.split('Forma de pagamento')[0] || produtosSection;
+      produtosTexto = endSection.trim();
+    }
+
+    // Extrair valor total
+    const valorMatch = aiResponse.match(/Valor total:\s*R\$\s*([\d,\.]+)/i) || 
+                      aiResponse.match(/Total:\s*R\$\s*([\d,\.]+)/i);
+    if (valorMatch) {
+      valorTotal = parseFloat(valorMatch[1].replace('.', '').replace(',', '.'));
+    }
+
+    // Extrair forma de pagamento
+    const pagamentoMatch = aiResponse.match(/Forma de pagamento:\s*([^\n]+)/i) || 
+                          aiResponse.match(/Pagamento:\s*([^\n]+)/i);
+    if (pagamentoMatch) {
+      formaPagamento = pagamentoMatch[1].trim();
+    }
+
+    // Extrair forma de entrega
+    const entregaMatch = aiResponse.match(/Entrega:\s*([^\n]+)/i);
+    if (entregaMatch) {
+      formaEntrega = entregaMatch[1].trim();
+    }
+
+    // Extrair observações
+    const obsMatch = aiResponse.match(/Observações:\s*([^]*?)(?=$|\n\n)/i);
+    if (obsMatch) {
+      observacoes = obsMatch[1].trim();
+    }
 
     // Processar produtos individuais
-    const produtos = extrairProdutosDoTexto(produtosTexto);
+    const produtos = produtosTexto ? extrairProdutosDoTexto(produtosTexto) : [];
 
+    // Se não conseguiu extrair produtos, criar um registro básico
     if (produtos.length === 0) {
-      console.log('⚠️  Pedido detectado mas nenhum produto extraído');
-      return null;
+      console.log('⚠️  Não foi possível extrair produtos específicos, criando registro básico do pedido');
+      produtos.push({
+        nome: 'Pedido confirmado (detalhes na mensagem completa)',
+        quantidade: 1,
+        preco_unitario: valorTotal > 0 ? valorTotal : 0,
+        subtotal: valorTotal > 0 ? valorTotal : 0
+      });
+    }
+
+    // Calcular valor total se não foi extraído
+    if (valorTotal === 0 && produtos.length > 0) {
+      valorTotal = produtos.reduce((total, produto) => total + produto.subtotal, 0);
     }
 
     const pedidoData = {
@@ -319,10 +368,12 @@ async function processarPedido(aiResponse, sessionId, senderName, groupName, isM
       forma_pagamento: formaPagamento,
       forma_entrega: formaEntrega,
       observacoes: observacoes,
-      status: 'confirmado'
+      status: 'confirmado',
+      resposta_completa: aiResponse, // Armazena a mensagem completa
+      pedido_id: pedidoId // Armazena o ID do pedido
     };
 
-    console.log(`🛒 Pedido processado: ${produtos.length} produtos, R$ ${valorTotal}`);
+    console.log(`🛒 Pedido processado: ${produtos.length} produtos, R$ ${valorTotal}, ID: ${pedidoId}`);
     return pedidoData;
 
   } catch (error) {
@@ -331,7 +382,7 @@ async function processarPedido(aiResponse, sessionId, senderName, groupName, isM
   }
 }
 
-// Função para salvar pedido no banco
+// Função para salvar pedido no banco - VERSÃO ATUALIZADA
 async function salvarPedido(pedidoData) {
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, pulando salvamento do pedido');
@@ -344,8 +395,8 @@ async function salvarPedido(pedidoData) {
     const [result] = await pool.execute(
       `INSERT INTO pedidos 
        (session_id, sender_name, group_name, is_group_message, produtos_json, valor_total, 
-        forma_pagamento, forma_entrega, observacoes, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        forma_pagamento, forma_entrega, observacoes, status, resposta_completa, pedido_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         pedidoData.session_id,
         pedidoData.sender_name,
@@ -356,17 +407,26 @@ async function salvarPedido(pedidoData) {
         pedidoData.forma_pagamento,
         pedidoData.forma_entrega,
         pedidoData.observacoes,
-        pedidoData.status
+        pedidoData.status,
+        pedidoData.resposta_completa,
+        pedidoData.pedido_id
       ]
     );
     
     const pedidoId = result.insertId;
-    console.log(`✅ Pedido salvo - ID: ${pedidoId}`);
+    console.log(`✅ Pedido salvo - ID: ${pedidoId}, Código: ${pedidoData.pedido_id}`);
     
-    // Atualizar estoque dos produtos
-    await atualizarEstoquePedido(JSON.parse(pedidoData.produtos_json));
+    // Atualizar estoque dos produtos apenas se conseguiu extrair produtos específicos
+    try {
+      const produtos = JSON.parse(pedidoData.produtos_json);
+      if (produtos.length > 0 && produtos[0].nome !== 'Pedido confirmado (detalhes na mensagem completa)') {
+        await atualizarEstoquePedido(produtos);
+      }
+    } catch (estoqueError) {
+      console.log('⚠️  Não foi possível atualizar estoque, mas o pedido foi salvo');
+    }
     
-    return pedidoId;
+    return { id: pedidoId, codigo: pedidoData.pedido_id };
     
   } catch (error) {
     console.error('❌ Erro ao salvar pedido:', error.message);
@@ -403,26 +463,22 @@ async function atualizarEstoquePedido(produtos) {
 }
 
 // Função para enviar notificação de novo pedido
-async function enviarNotificacaoPedido(pedidoId, pedidoData) {
+async function enviarNotificacaoPedido(pedidoInfo, pedidoData) {
   try {
     const produtos = JSON.parse(pedidoData.produtos_json);
     const mensagemNotificacao = `
-🆕 NOVO PEDIDO #${pedidoId}
+🆕 NOVO PEDIDO #${pedidoInfo.codigo}
 👤 Cliente: ${pedidoData.sender_name}
 📦 ${produtos.length} itens
 💰 Total: R$ ${pedidoData.valor_total}
 💳 Pagamento: ${pedidoData.forma_pagamento}
 🚚 Entrega: ${pedidoData.forma_entrega}
 ⏰ Horário: ${getCurrentDateTime().full}
+📝 Status: ${pedidoData.status}
     `.trim();
 
     console.log('🔔 Notificação de pedido:\n', mensagemNotificacao);
-    
-    // Aqui você pode integrar com:
-    // - Webhook do Discord
-    // - Bot do Telegram  
-    // - Email
-    // - WhatsApp Business API
+    console.log('📄 Mensagem completa armazenada no banco de dados');
     
   } catch (error) {
     console.error('❌ Erro ao enviar notificação:', error);
@@ -488,11 +544,12 @@ async function initializeDatabase() {
       )
     `);
     
-    // Cria a tabela pedidos se não existir
+    // Cria a tabela pedidos se não existir - VERSÃO ATUALIZADA
     console.log('🔄 Verificando/Criando tabela pedidos...');
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS pedidos (
         id INT AUTO_INCREMENT PRIMARY KEY,
+        pedido_id VARCHAR(50) NOT NULL,
         session_id VARCHAR(255) NOT NULL,
         sender_name VARCHAR(255) NOT NULL,
         group_name VARCHAR(255),
@@ -503,6 +560,7 @@ async function initializeDatabase() {
         forma_entrega ENUM('Retirada Local', 'UberFlash') DEFAULT 'Retirada Local',
         status ENUM('confirmado', 'preparando', 'pronto', 'entregue', 'cancelado') DEFAULT 'confirmado',
         observacoes TEXT,
+        resposta_completa TEXT NOT NULL,
         data_retirada DATETIME,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -786,7 +844,7 @@ Peça a forma de entrega (Retirada Local ou UberFlash)
 Quando o cliente confirmar o pedido, gere o resumo:
 
 ✅ PEDIDO CONFIRMADO  
-ID do Pedido: #MSXXXX  
+ID do Pedido: #MS${generateOrderId()}  
 Produtos: [listar com quantidade e preço]  
 Valor total: R$ [valor]  
 Forma de pagamento: [PIX ou Dinheiro]  
@@ -852,17 +910,17 @@ Se o cliente enrolar, pressione educadamente com frases como:
       receiveMessageApp
     });
 
-    // 🛒 Processar pedido se detectado
+    // 🛒 Processar pedido se detectado - MÉTODO MELHORADO
     const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
     const pedidoData = await processarPedido(aiResponse, sessionId, senderName, groupName, isMessageFromGroup);
 
     if (pedidoData) {
-      const pedidoId = await salvarPedido(pedidoData);
-      if (pedidoId) {
-        console.log(`🎉 Pedido #${pedidoId} registrado com sucesso!`);
+      const pedidoInfo = await salvarPedido(pedidoData);
+      if (pedidoInfo) {
+        console.log(`🎉 Pedido #${pedidoInfo.id} registrado com sucesso! Código: ${pedidoInfo.codigo}`);
         
         // Enviar notificação (opcional)
-        await enviarNotificacaoPedido(pedidoId, pedidoData);
+        await enviarNotificacaoPedido(pedidoInfo, pedidoData);
       }
     }
 
@@ -983,7 +1041,7 @@ app.delete('/produtos/:id', async (req, res) => {
   }
 });
 
-// Rotas para pedidos
+// Rotas para pedidos - VERSÃO ATUALIZADA
 app.get('/pedidos', async (req, res) => {
   if (!mysqlEnabled || !pool) {
     return res.status(500).json({ error: 'MySQL não disponível' });
@@ -1013,6 +1071,40 @@ app.get('/pedidos', async (req, res) => {
   }
 });
 
+// Buscar pedido por ID específico
+app.get('/pedidos/:id', async (req, res) => {
+  if (!mysqlEnabled || !pool) {
+    return res.status(500).json({ error: 'MySQL não disponível' });
+  }
+
+  try {
+    const { id } = req.params;
+    
+    const [rows] = await pool.execute(`
+      SELECT *, DATE_FORMAT(created_at, '%d/%m/%Y %H:%i') as data_pedido 
+      FROM pedidos 
+      WHERE id = ? OR pedido_id = ?
+    `, [id, id]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Pedido não encontrado' });
+    }
+    
+    const pedido = {
+      ...rows[0],
+      produtos_json: JSON.parse(rows[0].produtos_json)
+    };
+    
+    res.json({
+      status: 'success',
+      data: pedido
+    });
+  } catch (error) {
+    console.error('Erro ao buscar pedido:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // Atualizar status do pedido
 app.put('/pedidos/:id/status', async (req, res) => {
   if (!mysqlEnabled || !pool) {
@@ -1024,8 +1116,8 @@ app.put('/pedidos/:id/status', async (req, res) => {
     const { status } = req.body;
     
     await pool.execute(
-      'UPDATE pedidos SET status = ? WHERE id = ?',
-      [status, id]
+      'UPDATE pedidos SET status = ? WHERE id = ? OR pedido_id = ?',
+      [status, id, id]
     );
     
     res.json({
@@ -1051,13 +1143,17 @@ app.get('/pedidos/estatisticas', async (req, res) => {
       WHERE DATE(created_at) = CURDATE()
     `);
     const [revenue] = await pool.execute('SELECT SUM(valor_total) as revenue FROM pedidos');
+    const [statusCounts] = await pool.execute(`
+      SELECT status, COUNT(*) as count FROM pedidos GROUP BY status
+    `);
     
     res.json({
       status: 'success',
       data: {
         total_pedidos: total[0].total,
         pedidos_hoje: hoje[0].hoje,
-        faturamento_total: revenue[0].revenue || 0
+        faturamento_total: revenue[0].revenue || 0,
+        status: statusCounts
       }
     });
   } catch (error) {
@@ -1143,7 +1239,7 @@ app.get('/ping', async (req, res) => {
       model: model,
       timestamp: new Date().toISOString(),
       currentDateTime: getCurrentDateTime(),
-      service: 'Railway MySQL + Multi-API + Sistema de Pedidos',
+      service: 'Railway MySQL + Multi-API + Sistema de Pedidos Aprimorado',
       mysql_keep_alive: mysqlAlive
     });
   } catch (error) {
@@ -1196,7 +1292,7 @@ app.get('/', (req, res) => {
   const currentDateTime = getCurrentDateTime();
   
   res.json({ 
-    service: 'AutoReply Webhook com Multi-API + MySQL + Sistema de Pedidos',
+    service: 'AutoReply Webhook com Multi-API + MySQL + Sistema de Pedidos Aprimorado',
     status: 'Online',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
     apis: { total: API_KEYS.length, current: currentApiIndex },
@@ -1212,6 +1308,7 @@ app.get('/', (req, res) => {
       conversations: 'GET /conversations',
       produtos: 'GET/POST/PUT/DELETE /produtos',
       pedidos: 'GET /pedidos',
+      'pedido-especifico': 'GET /pedidos/:id',
       'pedidos-estatisticas': 'GET /pedidos/estatisticas',
       'atualizar-status': 'PUT /pedidos/:id/status'
     },
@@ -1219,17 +1316,18 @@ app.get('/', (req, res) => {
       'multi-api': 'Rotacionamento automático de APIs',
       'mysql': 'Banco de dados para conversas e produtos',
       'produtos-dinamicos': 'Gerenciamento de estoque em tempo real',
-      'sistema-pedidos': 'Registro automático de pedidos',
-      'atualizacao-estoque': 'Estoque atualizado automaticamente',
-      'historico-conversas': 'Manutenção de contexto de conversa'
+      'sistema-pedidos': 'Registro automático de pedidos aprimorado',
+      'resposta-completa': 'Armazena mensagem completa da IA',
+      'id-pedido': 'Gera e armazena ID único do pedido',
+      'extracao-flexivel': 'Extrai dados mesmo com variações no texto'
     },
-    note: 'Sistema completo de atendimento e vendas com registro automático de pedidos'
+    note: 'Sistema aprimorado com armazenamento completo da resposta da IA'
   });
 });
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com Sistema de Pedidos...');
+  console.log('🚀 Iniciando servidor AutoReply com Sistema de Pedidos Aprimorado...');
   console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
   console.log(`🤖 Modelo: ${model}`);
   
@@ -1242,20 +1340,19 @@ async function startServer() {
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🛍️  Gerenciar produtos: GET/POST/PUT/DELETE /produtos`);
     console.log(`📦 Gerenciar pedidos: GET /pedidos`);
+    console.log(`🔍 Buscar pedido específico: GET /pedidos/:id`);
     console.log(`📊 Estatísticas: GET /pedidos/estatisticas`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     console.log(`🔋 Keep-alive MySQL: ✅ ATIVO via rota /ping`);
     console.log(`📅 Data/Hora do servidor: ${currentDateTime.full}`);
     
-    console.log('\n🎯 SISTEMA DE PEDIDOS CONFIGURADO:');
-    console.log(`   ✅ Tabela pedidos criada/verificada`);
-    console.log(`   ✅ Detecção automática de pedidos confirmados`);
-    console.log(`   ✅ Extração de produtos e quantidades`);
-    console.log(`   ✅ Atualização automática de estoque`);
-    console.log(`   ✅ APIs REST para gerenciamento de pedidos`);
-    console.log(`   ✅ Sistema keep-alive MySQL para evitar dormência`);
-    console.log(`   ✅ Data e hora disponíveis para a IA`);
-    console.log(`   ✅ Notificações de novos pedidos (console)`);
+    console.log('\n🎯 SISTEMA DE PEDIDOS APRIMORADO:');
+    console.log(`   ✅ Armazenamento da mensagem completa da IA`);
+    console.log(`   ✅ Geração automática de ID do pedido`);
+    console.log(`   ✅ Extração flexível de dados do pedido`);
+    console.log(`   ✅ Fallback quando não consegue extrair produtos`);
+    console.log(`   ✅ Busca de pedido por ID ou código`);
+    console.log(`   ✅ Estatísticas detalhadas por status`);
   });
 }
 
