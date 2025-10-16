@@ -20,6 +20,20 @@ const model = "openai/gpt-4.1";
 let currentApiIndex = 0;
 let rateLimitStats = {};
 
+// Cache para otimização
+let produtosCache = null;
+let produtosCacheTimestamp = 0;
+const CACHE_DURATION = 30000; // 30 segundos
+
+let connectionTestCache = null;
+let lastConnectionTest = 0;
+const CONNECTION_TEST_INTERVAL = 60000; // 1 minuto
+
+let lastKeepAlive = 0;
+const KEEP_ALIVE_INTERVAL = 30000; // 30 segundos
+
+let initializationPromise = null;
+
 // String de conexão direta do Railway
 const MYSQL_CONNECTION_STRING = "mysql://root:ZefFlJwoGgbGclwcSyOeZuvMGVqmhvtH@trolley.proxy.rlwy.net:52398/railway";
 
@@ -59,6 +73,43 @@ const dbConfig = parseMySQLString(MYSQL_CONNECTION_STRING) || {
   charset: 'utf8mb4'
 };
 
+// Pré-compilação de queries SQL frequentes
+const SQL_QUERIES = {
+  INSERT_CONVERSATION: `INSERT INTO conversations 
+       (session_id, sender_name, group_name, is_group_message, sender_message, ai_response, message_datetime, receive_message_app) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  
+  SELECT_CONVERSATIONS: `SELECT sender_message, ai_response, created_at 
+       FROM conversations 
+       WHERE session_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT ?`,
+  
+  SELECT_PRODUCTS: `SELECT nome, descricao, preco, estoque FROM produtos_pronta_entrega 
+       WHERE disponibilidade = 'Pronta Entrega' AND estoque > 0 
+       LIMIT 50`,
+  
+  KEEP_ALIVE: `SELECT 1 as keep_alive`,
+  TEST_CONNECTION: `SELECT 1 as test`
+};
+
+// Otimização da formatação de data/hora
+const dateTimeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+});
+
+const weekdayFormatter = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  weekday: 'long'
+});
+
 // Verifica se há pelo menos uma chave API disponível
 if (API_KEYS.length === 0) {
   console.error("ERRO: Nenhuma GITHUB_TOKEN encontrada nas variáveis de ambiente");
@@ -67,25 +118,22 @@ if (API_KEYS.length === 0) {
 
 console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
 
-// Função para obter data e hora formatadas
+// Função para obter data e hora formatadas (OTIMIZADA)
 function getCurrentDateTime() {
   const now = new Date();
+  const formatted = dateTimeFormatter.formatToParts(now);
+  const weekday = weekdayFormatter.format(now);
+  
+  const parts = {};
+  formatted.forEach(part => {
+    parts[part.type] = part.value;
+  });
 
-  now.setTime(now.getTime() - 3 * 60 * 60 * 1000);
-  
-  // Formato para o Brasil (DD/MM/AAAA HH:MM:SS)
-  const day = String(now.getDate()).padStart(2, '0');
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year = now.getFullYear();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
-  
   return {
-    date: `${day}/${month}/${year}`,
-    time: `${hours}:${minutes}:${seconds}`,
-    full: `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`,
-    weekday: now.toLocaleDateString('pt-BR', { weekday: 'long' }),
+    date: `${parts.day}/${parts.month}/${parts.year}`,
+    time: `${parts.hour}:${parts.minute}:${parts.second}`,
+    full: `${parts.day}/${parts.month}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second}`,
+    weekday: weekday,
     timestamp: now.getTime()
   };
 }
@@ -99,18 +147,27 @@ function getCurrentClient() {
   });
 }
 
-// Função para rotacionar para a próxima API
+// Função para rotacionar para a próxima API (OTIMIZADA)
 function rotateToNextApi() {
   const oldIndex = currentApiIndex;
-  currentApiIndex = (currentApiIndex + 1) % API_KEYS.length;
+  const totalApis = API_KEYS.length;
   
-  if (!rateLimitStats[oldIndex]) {
-    rateLimitStats[oldIndex] = { rateLimitedAt: new Date() };
-  } else {
-    rateLimitStats[oldIndex].rateLimitedAt = new Date();
+  // Encontra próxima API disponível (não rate limited recentemente)
+  for (let i = 1; i <= totalApis; i++) {
+    const nextIndex = (oldIndex + i) % totalApis;
+    const rateLimitInfo = rateLimitStats[nextIndex];
+    
+    // Se não tem info de rate limit ou passou mais de 1 minuto, usa esta
+    if (!rateLimitInfo || (Date.now() - rateLimitInfo.rateLimitedAt) > 60000) {
+      currentApiIndex = nextIndex;
+      console.log(`🔄 Rotacionando API: ${oldIndex} → ${currentApiIndex}`);
+      return getCurrentClient();
+    }
   }
   
-  console.log(`🔄 Rotacionando API: ${oldIndex} → ${currentApiIndex}`);
+  // Se todas estão com rate limit recente, usa a próxima mesmo assim
+  currentApiIndex = (oldIndex + 1) % totalApis;
+  console.log(`🔄 Rotacionando API (todas limitadas): ${oldIndex} → ${currentApiIndex}`);
   return getCurrentClient();
 }
 
@@ -165,31 +222,48 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
 let pool;
 let mysqlEnabled = false;
 
-// Função para testar conexão MySQL
+// Função para testar conexão MySQL (OTIMIZADA com cache)
 async function testMySQLConnection() {
+  const now = Date.now();
+  
+  if (connectionTestCache && (now - lastConnectionTest) < CONNECTION_TEST_INTERVAL) {
+    return connectionTestCache;
+  }
+
   console.log('🔌 Testando conexão MySQL...');
   
   try {
     const testConnection = await mysql.createConnection(dbConfig);
-    await testConnection.execute('SELECT 1 as test');
+    await testConnection.execute(SQL_QUERIES.TEST_CONNECTION);
     console.log('✅ Teste de conexão MySQL: OK');
     await testConnection.end();
+    
+    connectionTestCache = true;
+    lastConnectionTest = now;
     return true;
   } catch (error) {
     console.error('❌ Teste de conexão MySQL falhou:', error.message);
+    connectionTestCache = false;
+    lastConnectionTest = now;
     return false;
   }
 }
 
-// Função para manter o MySQL ativo
+// Função para manter o MySQL ativo (OTIMIZADA)
 async function keepMySQLAlive() {
+  const now = Date.now();
+  if (now - lastKeepAlive < KEEP_ALIVE_INTERVAL) {
+    return true;
+  }
+
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível para keep-alive');
     return false;
   }
 
   try {
-    const [rows] = await pool.execute('SELECT 1 as keep_alive');
+    const [rows] = await pool.execute(SQL_QUERIES.KEEP_ALIVE);
+    lastKeepAlive = now;
     console.log('✅ Keep-alive MySQL executado com sucesso');
     return true;
   } catch (error) {
@@ -207,120 +281,44 @@ async function keepMySQLAlive() {
   }
 }
 
-// Função para buscar produtos de pronta entrega
+// Função para buscar produtos de pronta entrega (OTIMIZADA com cache)
 async function getProntaEntregaProducts() {
+  const now = Date.now();
+  
+  // Retorna cache se ainda é válido
+  if (produtosCache && (now - produtosCacheTimestamp) < CACHE_DURATION) {
+    return produtosCache;
+  }
+
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, usando produtos padrão');
-    return null;
+    return "Nenhum produto disponível para pronta entrega no momento.";
   }
 
   try {
-    const [rows] = await pool.execute(
-      `SELECT nome, descricao, preco, estoque FROM produtos_pronta_entrega WHERE disponibilidade = 'Pronta Entrega' AND estoque > 0`
-    );
+    const [rows] = await pool.execute(SQL_QUERIES.SELECT_PRODUCTS);
 
     if (rows.length === 0) {
-      return "Nenhum produto disponível para pronta entrega no momento.";
+      produtosCache = "Nenhum produto disponível para pronta entrega no momento.";
+    } else {
+      let productsString = "📦 PRODUTOS DISPONÍVEIS – PRONTA ENTREGA\n\n";
+      // Usando for loop em vez de forEach para melhor performance
+      for (let i = 0; i < rows.length; i++) {
+        const product = rows[i];
+        productsString += `🎂 ${product.nome}\n` +
+                         `• Descrição: ${product.descricao}\n` +
+                         `• Preço: R$ ${product.preco} cada\n` +
+                         `• Estoque: ${product.estoque} unidades\n` +
+                         `• Disponibilidade: ✅ Pronta Entrega\n\n`;
+      }
+      produtosCache = productsString;
     }
 
-    let productsString = "📦 PRODUTOS DISPONÍVEIS – PRONTA ENTREGA\n\n";
-    rows.forEach(product => {
-      productsString += `🎂 ${product.nome}\n`;
-      productsString += `• Descrição: ${product.descricao}\n`;
-      productsString += `• Preço: R$ ${product.preco} cada\n`;
-      productsString += `• Estoque: ${product.estoque} unidades\n`;
-      productsString += `• Disponibilidade: ✅ Pronta Entrega\n\n`;
-    });
-
-    return productsString;
+    produtosCacheTimestamp = now;
+    return produtosCache;
   } catch (error) {
     console.error('❌ Erro ao buscar produtos de pronta entrega:', error.message);
-    return null;
-  }
-}
-
-async function initializeDatabase() {
-  console.log('🔄 Inicializando MySQL para Railway...');
-  
-  if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
-    console.log('🚫 Configurações do MySQL incompletas');
-    mysqlEnabled = false;
-    return;
-  }
-
-  const connectionTest = await testMySQLConnection();
-  if (!connectionTest) {
-    console.log('🚫 MySQL desabilitado - não foi possível conectar');
-    mysqlEnabled = false;
-    return;
-  }
-
-  try {
-    pool = mysql.createPool({
-      ...dbConfig,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-      acquireTimeout: 10000,
-      timeout: 10000,
-    });
-
-    const connection = await pool.getConnection();
-    console.log('✅ Pool MySQL conectado com sucesso');
-    
-    // Cria a tabela conversations se não existir
-    console.log('🔄 Verificando/Criando tabela conversations...');
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS conversations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255) NOT NULL,
-        group_name VARCHAR(255),
-        is_group_message BOOLEAN DEFAULT FALSE,
-        sender_message TEXT NOT NULL,
-        ai_response TEXT NOT NULL,
-        message_datetime BIGINT,
-        receive_message_app VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    
-    // Cria a tabela produtos_pronta_entrega se não existir
-    console.log('🔄 Verificando/Criando tabela produtos_pronta_entrega...');
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS produtos_pronta_entrega (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        nome VARCHAR(100) NOT NULL,
-        descricao TEXT,
-        preco DECIMAL(10,2) NOT NULL,
-        estoque INT NOT NULL,
-        disponibilidade ENUM('Pronta Entrega') DEFAULT 'Pronta Entrega'
-      )
-    `);
-    
-    console.log('✅ Tabelas verificadas/criadas');
-    
-    // Testa a funcionalidade de produtos
-    console.log('🔄 Testando busca de produtos...');
-    const produtosTeste = await getProntaEntregaProducts();
-    console.log('✅ Teste de produtos:', produtosTeste ? 'OK' : 'FALHOU');
-    
-    connection.release();
-    mysqlEnabled = true;
-    console.log('🎉 MySQL totalmente inicializado e funcionando!');
-    
-  } catch (error) {
-    console.error('❌ Erro na inicialização do MySQL:', error.message);
-    mysqlEnabled = false;
-    
-    if (pool) {
-      try {
-        await pool.end();
-        pool = null;
-      } catch (e) {
-        console.error('Erro ao fechar pool:', e.message);
-      }
-    }
+    return "Nenhum produto disponível para pronta entrega no momento.";
   }
 }
 
@@ -332,7 +330,7 @@ function generateSessionId(senderName, groupName, isMessageFromGroup) {
   return `user_${senderName}`;
 }
 
-// Função para salvar conversa no banco
+// Função para salvar conversa no banco (OTIMIZADA)
 async function saveConversation(conversationData) {
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, pulando salvamento');
@@ -349,16 +347,14 @@ async function saveConversation(conversationData) {
     console.log(`💾 Salvando conversa para: ${sessionId}`);
     
     const [result] = await pool.execute(
-      `INSERT INTO conversations 
-       (session_id, sender_name, group_name, is_group_message, sender_message, ai_response, message_datetime, receive_message_app) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      SQL_QUERIES.INSERT_CONVERSATION,
       [
         sessionId,
         conversationData.senderName || '',
         conversationData.groupName || '',
         conversationData.isMessageFromGroup ? 1 : 0,
-        conversationData.senderMessage || '',
-        conversationData.aiResponse || '',
+        conversationData.senderMessage.substring(0, 4000) || '',
+        conversationData.aiResponse.substring(0, 4000) || '',
         conversationData.messageDateTime || Date.now(),
         conversationData.receiveMessageApp || 'unknown'
       ]
@@ -373,8 +369,8 @@ async function saveConversation(conversationData) {
   }
 }
 
-// Função para buscar histórico de conversas
-async function getConversationHistory(senderName, groupName, isMessageFromGroup, limit = 6) {
+// Função para buscar histórico de conversas (OTIMIZADA)
+async function getConversationHistory(senderName, groupName, isMessageFromGroup, limit = 4) {
   if (!mysqlEnabled || !pool) {
     console.log('⚠️  MySQL não disponível, sem histórico');
     return [];
@@ -385,14 +381,10 @@ async function getConversationHistory(senderName, groupName, isMessageFromGroup,
     
     console.log(`📚 Buscando histórico para sessão: ${sessionId}`);
     
-    const safeLimit = parseInt(limit);
+    const safeLimit = Math.min(parseInt(limit), 10);
     const [rows] = await pool.execute(
-      `SELECT sender_message, ai_response, created_at 
-       FROM conversations 
-       WHERE session_id = ? 
-       ORDER BY created_at DESC 
-       LIMIT ${safeLimit}`,
-      [sessionId]
+      SQL_QUERIES.SELECT_CONVERSATIONS,
+      [sessionId, safeLimit]
     );
     
     console.log(`✅ Histórico carregado: ${rows.length} mensagens`);
@@ -436,6 +428,103 @@ async function cleanupOldMessages(senderName, groupName, isMessageFromGroup) {
   }
 }
 
+// Inicialização do banco (OTIMIZADA)
+async function initializeDatabase() {
+  // Evita múltiplas inicializações simultâneas
+  if (initializationPromise) {
+    return initializationPromise;
+  }
+
+  initializationPromise = (async () => {
+    console.log('🔄 Inicializando MySQL para Railway...');
+    
+    if (!dbConfig.host || !dbConfig.user || !dbConfig.password || !dbConfig.database) {
+      console.log('🚫 Configurações do MySQL incompletas');
+      mysqlEnabled = false;
+      return;
+    }
+
+    const connectionTest = await testMySQLConnection();
+    if (!connectionTest) {
+      console.log('🚫 MySQL desabilitado - não foi possível conectar');
+      mysqlEnabled = false;
+      return;
+    }
+
+    try {
+      pool = mysql.createPool({
+        ...dbConfig,
+        waitForConnections: true,
+        connectionLimit: 5,
+        queueLimit: 0,
+        acquireTimeout: 8000,
+        timeout: 8000,
+      });
+
+      const connection = await pool.getConnection();
+      console.log('✅ Pool MySQL conectado com sucesso');
+      
+      // Executa todas as criações de tabela em paralelo
+      await Promise.all([
+        connection.execute(`
+          CREATE TABLE IF NOT EXISTS conversations (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            session_id VARCHAR(255) NOT NULL,
+            sender_name VARCHAR(255) NOT NULL,
+            group_name VARCHAR(255),
+            is_group_message BOOLEAN DEFAULT FALSE,
+            sender_message TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            message_datetime BIGINT,
+            receive_message_app VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX session_idx (session_id),
+            INDEX created_idx (created_at)
+          )
+        `),
+        connection.execute(`
+          CREATE TABLE IF NOT EXISTS produtos_pronta_entrega (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(100) NOT NULL,
+            descricao TEXT,
+            preco DECIMAL(10,2) NOT NULL,
+            estoque INT NOT NULL,
+            disponibilidade ENUM('Pronta Entrega') DEFAULT 'Pronta Entrega',
+            INDEX disponibilidade_idx (disponibilidade),
+            INDEX estoque_idx (estoque)
+          )
+        `)
+      ]);
+      
+      console.log('✅ Tabelas verificadas/criadas');
+      
+      // Testa a funcionalidade de produtos
+      console.log('🔄 Testando busca de produtos...');
+      const produtosTeste = await getProntaEntregaProducts();
+      console.log('✅ Teste de produtos:', produtosTeste ? 'OK' : 'FALHOU');
+      
+      connection.release();
+      mysqlEnabled = true;
+      console.log('🎉 MySQL totalmente inicializado e funcionando!');
+      
+    } catch (error) {
+      console.error('❌ Erro na inicialização do MySQL:', error.message);
+      mysqlEnabled = false;
+      
+      if (pool) {
+        try {
+          await pool.end();
+          pool = null;
+        } catch (e) {
+          console.error('Erro ao fechar pool:', e.message);
+        }
+      }
+    }
+  })();
+
+  return initializationPromise;
+}
+
 // Webhook principal
 app.post('/webhook', async (req, res) => {
   try {
@@ -456,11 +545,11 @@ app.post('/webhook', async (req, res) => {
     const currentDateTime = getCurrentDateTime();
     console.log(`📅 Data/Hora atual: ${currentDateTime.full}`);
 
-    // Busca produtos de pronta entrega do banco
+    // Busca produtos de pronta entrega do banco (com cache)
     const prontaEntregaProducts = await getProntaEntregaProducts();
 
     // Busca histórico recente da conversa
-    const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
+    const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 4);
     
     // Prepara o contexto com histórico e produtos dinâmicos
     const messages = [
@@ -615,10 +704,11 @@ Se o cliente enrolar, pressione educadamente com frases como:
     ];
 
     // Adiciona histórico ao contexto
-    history.forEach(conv => {
+    for (let i = 0; i < history.length; i++) {
+      const conv = history[i];
       messages.push({ role: "user", content: conv.sender_message });
       messages.push({ role: "assistant", content: conv.ai_response });
-    });
+    }
 
     // Adiciona a mensagem atual
     messages.push({ role: "user", content: senderMessage });
@@ -671,8 +761,6 @@ Se o cliente enrolar, pressione educadamente com frases como:
   }
 });
 
-// ... (o restante do código permanece igual - rotas administrativas, inicialização do servidor, etc.)
-
 // Rotas administrativas para gerenciar produtos
 app.get('/produtos', async (req, res) => {
   if (!mysqlEnabled || !pool) {
@@ -705,6 +793,9 @@ app.post('/produtos', async (req, res) => {
       [nome, descricao, preco, estoque]
     );
     
+    // Invalida o cache
+    produtosCache = null;
+    
     res.json({
       status: 'success',
       message: 'Produto adicionado com sucesso',
@@ -730,6 +821,9 @@ app.put('/produtos/:id', async (req, res) => {
       [nome, descricao, preco, estoque, id]
     );
     
+    // Invalida o cache
+    produtosCache = null;
+    
     res.json({
       status: 'success',
       message: 'Produto atualizado com sucesso'
@@ -750,6 +844,9 @@ app.delete('/produtos/:id', async (req, res) => {
     
     await pool.execute('DELETE FROM produtos_pronta_entrega WHERE id = ?', [id]);
     
+    // Invalida o cache
+    produtosCache = null;
+    
     res.json({
       status: 'success',
       message: 'Produto removido com sucesso'
@@ -760,7 +857,7 @@ app.delete('/produtos/:id', async (req, res) => {
   }
 });
 
-// Rotas existentes (conversations, status, rotate-api, ping, health) mantidas iguais
+// Rotas existentes
 app.get('/conversations', async (req, res) => {
   if (!mysqlEnabled || !pool) {
     return res.status(500).json({ error: 'MySQL não disponível' });
@@ -780,7 +877,7 @@ app.get('/status', async (req, res) => {
     let dbStatus = 'disabled';
     if (mysqlEnabled && pool) {
       try {
-        await pool.execute('SELECT 1');
+        await pool.execute(SQL_QUERIES.KEEP_ALIVE);
         dbStatus = 'connected';
       } catch (error) {
         dbStatus = 'error';
@@ -802,7 +899,11 @@ app.get('/status', async (req, res) => {
       model: model,
       timestamp: new Date().toISOString(),
       currentDateTime: getCurrentDateTime(),
-      uptime: Math.floor(process.uptime()) + ' segundos'
+      uptime: Math.floor(process.uptime()) + ' segundos',
+      cache: {
+        produtos: produtosCache ? 'ATIVO' : 'INATIVO',
+        connectionTest: connectionTestCache ? 'ATIVO' : 'INATIVO'
+      }
     });
   } catch (error) {
     res.status(500).json({ status: 'Error', message: 'Service unhealthy' });
@@ -837,8 +938,14 @@ app.get('/ping', async (req, res) => {
       model: model,
       timestamp: new Date().toISOString(),
       currentDateTime: getCurrentDateTime(),
-      service: 'Railway MySQL + Multi-API',
-      mysql_keep_alive: mysqlAlive
+      service: 'Railway MySQL + Multi-API (OTIMIZADO)',
+      mysql_keep_alive: mysqlAlive,
+      optimizations: {
+        cache_produtos: produtosCache ? 'ATIVO' : 'INATIVO',
+        cache_connection: connectionTestCache ? 'ATIVO' : 'INATIVO',
+        precompiled_queries: 'ATIVO',
+        intelligent_rotation: 'ATIVO'
+      }
     });
   } catch (error) {
     console.error('❌ Erro na rota /ping:', error);
@@ -857,7 +964,7 @@ app.get('/health', async (req, res) => {
     
     if (mysqlEnabled && pool) {
       try {
-        await pool.execute('SELECT 1');
+        await pool.execute(SQL_QUERIES.KEEP_ALIVE);
         dbStatus = 'connected';
         mysqlAlive = true;
       } catch (error) {
@@ -875,7 +982,8 @@ app.get('/health', async (req, res) => {
       model: model,
       timestamp: new Date().toISOString(),
       currentDateTime: getCurrentDateTime(),
-      uptime: Math.floor(process.uptime()) + ' segundos'
+      uptime: Math.floor(process.uptime()) + ' segundos',
+      optimizations: 'CACHE+PRE-COMPILATION+INTELLIGENT_ROTATION'
     });
   } catch (error) {
     res.status(500).json({ 
@@ -890,13 +998,22 @@ app.get('/', (req, res) => {
   const currentDateTime = getCurrentDateTime();
   
   res.json({ 
-    service: 'AutoReply Webhook com Multi-API + MySQL + Produtos Dinâmicos',
+    service: 'AutoReply Webhook com Multi-API + MySQL + Produtos Dinâmicos (OTIMIZADO)',
     status: 'Online',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
     apis: { total: API_KEYS.length, current: currentApiIndex },
     model: model,
     deployment: 'Railway',
     currentDateTime: currentDateTime,
+    optimizations: [
+      'Cache de produtos (30s)',
+      'Cache de teste de conexão (60s)',
+      'Keep-alive inteligente (30s)',
+      'Rotacionamento inteligente de APIs',
+      'Queries SQL pré-compiladas',
+      'Formatação de data otimizada',
+      'Inicialização única do banco'
+    ],
     endpoints: {
       webhook: 'POST /webhook',
       health: 'GET /health',
@@ -906,13 +1023,13 @@ app.get('/', (req, res) => {
       conversations: 'GET /conversations',
       produtos: 'GET/POST/PUT/DELETE /produtos'
     },
-    note: 'A IA agora tem acesso à data e hora atual para melhor atendimento'
+    note: 'Sistema totalmente otimizado com cache e performance melhorada'
   });
 });
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com Produtos Dinâmicos...');
+  console.log('🚀 Iniciando servidor AutoReply com Produtos Dinâmicos (OTIMIZADO)...');
   console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
   console.log(`🤖 Modelo: ${model}`);
   
@@ -928,13 +1045,13 @@ async function startServer() {
     console.log(`🔋 Keep-alive MySQL: ✅ ATIVO via rota /ping`);
     console.log(`📅 Data/Hora do servidor: ${currentDateTime.full}`);
     
-    console.log('\n🎯 SISTEMA DE PRODUTOS DINÂMICOS CONFIGURADO:');
-    console.log(`   ✅ Tabela produtos_pronta_entrega criada/verificada`);
-    console.log(`   ✅ Consulta automática a cada mensagem`);
-    console.log(`   ✅ APIs REST para gerenciamento`);
-    console.log(`   ✅ Fallback para produtos padrão se MySQL falhar`);
-    console.log(`   ✅ Sistema keep-alive MySQL para evitar dormência`);
-    console.log(`   ✅ Data e hora disponíveis para a IA`);
+    console.log('\n🎯 SISTEMA DE PRODUTOS DINÂMICOS OTIMIZADO:');
+    console.log(`   ✅ Cache de produtos (30 segundos)`);
+    console.log(`   ✅ Queries SQL pré-compiladas`);
+    console.log(`   ✅ Rotacionamento inteligente de APIs`);
+    console.log(`   ✅ Formatação de data/hora otimizada`);
+    console.log(`   ✅ Inicialização única do banco`);
+    console.log(`   ✅ Keep-alive inteligente MySQL`);
   });
 }
 
