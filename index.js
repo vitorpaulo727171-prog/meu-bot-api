@@ -67,6 +67,27 @@ if (API_KEYS.length === 0) {
 
 console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
 
+// Função para obter data e hora formatadas
+function getCurrentDateTime() {
+  const now = new Date();
+  
+  // Formato para o Brasil (DD/MM/AAAA HH:MM:SS)
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getFullYear();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  
+  return {
+    date: `${day}/${month}/${year}`,
+    time: `${hours}:${minutes}:${seconds}`,
+    full: `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`,
+    weekday: now.toLocaleDateString('pt-BR', { weekday: 'long' }),
+    timestamp: now.getTime()
+  };
+}
+
 // Função para obter o cliente atual
 function getCurrentClient() {
   const token = API_KEYS[currentApiIndex];
@@ -429,6 +450,10 @@ app.post('/webhook', async (req, res) => {
     console.log(`🗃️  MySQL: ${mysqlEnabled ? 'HABILITADO' : 'DESABILITADO'}`);
     console.log(`🔑 API atual: ${currentApiIndex}`);
 
+    // Obtém data e hora atual
+    const currentDateTime = getCurrentDateTime();
+    console.log(`📅 Data/Hora atual: ${currentDateTime.full}`);
+
     // Busca produtos de pronta entrega do banco
     const prontaEntregaProducts = await getProntaEntregaProducts();
 
@@ -449,7 +474,12 @@ Você SEMPRE mantém o foco total em vendas, produtos e pedidos.
 Você deverá mandar o atendimento humanizado sempre quando o cliente solicitar.
 Voce SEMPRE devera mostrar se o produto escolhido pelo cliente tem disponível em pronta entrega. 
 Voce SEMPRE devera dizer quando tentarem comprar um produto que nao esta disponível em pronta entrega, que o mesmo deverá fazer uma encomenda.
----
+
+📅 INFORMAÇÃO DE DATA E HORA ATUAL:
+• Data: ${currentDateTime.date}
+• Hora: ${currentDateTime.time}
+• Dia da semana: ${currentDateTime.weekday}
+• Timestamp: ${currentDateTime.timestamp}
 
 📍 INFORMAÇÕES DA LOJA:
 
@@ -533,7 +563,6 @@ ${prontaEntregaProducts}
 "Olá, (user)! 👋 Bem-vindo ao Mercado dos Sabores! 😊 Temos brownies, bolos, salgados e muito mais. Do que você está com vontade hoje?"
 •Você SEMPRE deverá esperar a resposta do cliente para mandar o catálogo ou produtos a pronta entrega.
 
-
 2. AO RECEBER PEDIDO:
 Confirme produto, quantidade e valor total
 Informe o tempo médio de preparo (25–40 min)
@@ -551,6 +580,7 @@ Forma de pagamento: [PIX ou Dinheiro]
 Entrega: Retirada Local  
 Tempo de preparo: 25 a 40 minutos
 Data de retirada: (Caso seja encomenda. Data informada pelo cliente)
+Data/hora do pedido: ${currentDateTime.full}
 
 4. PRODUTOS INDISPONÍVEIS:
 Nunca diga apenas "acabou".
@@ -572,7 +602,13 @@ Se o cliente enrolar, pressione educadamente com frases como:
 "Quer garantir o seu antes que acabe? Temos poucas unidades de pronta entrega. 😉"
 
         ${groupName ? `Estamos no grupo "${groupName}".` : `Conversando com ${senderName}.`}
-        ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}`
+        ${history.length > 0 ? `Esta conversa tem ${history.length} mensagens de histórico.` : ''}
+        
+📅 CONTEXTO TEMPORAL:
+• Data atual: ${currentDateTime.date}
+• Hora atual: ${currentDateTime.time}
+• Dia da semana: ${currentDateTime.weekday}
+• Use estas informações para calcular prazos de entrega e disponibilidade`
       }
     ];
 
@@ -632,6 +668,8 @@ Se o cliente enrolar, pressione educadamente com frases como:
     });
   }
 });
+
+// ... (o restante do código permanece igual - rotas administrativas, inicialização do servidor, etc.)
 
 // Rotas administrativas para gerenciar produtos
 app.get('/produtos', async (req, res) => {
@@ -761,6 +799,7 @@ app.get('/status', async (req, res) => {
       apis: { total: API_KEYS.length, current: currentApiIndex, statistics: apiStats },
       model: model,
       timestamp: new Date().toISOString(),
+      currentDateTime: getCurrentDateTime(),
       uptime: Math.floor(process.uptime()) + ' segundos'
     });
   } catch (error) {
@@ -795,6 +834,7 @@ app.get('/ping', async (req, res) => {
       apis: { total: API_KEYS.length, current: currentApiIndex },
       model: model,
       timestamp: new Date().toISOString(),
+      currentDateTime: getCurrentDateTime(),
       service: 'Railway MySQL + Multi-API',
       mysql_keep_alive: mysqlAlive
     });
@@ -832,6 +872,7 @@ app.get('/health', async (req, res) => {
       apis: { total: API_KEYS.length, current: currentApiIndex },
       model: model,
       timestamp: new Date().toISOString(),
+      currentDateTime: getCurrentDateTime(),
       uptime: Math.floor(process.uptime()) + ' segundos'
     });
   } catch (error) {
@@ -844,6 +885,8 @@ app.get('/health', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
+  const currentDateTime = getCurrentDateTime();
+  
   res.json({ 
     service: 'AutoReply Webhook com Multi-API + MySQL + Produtos Dinâmicos',
     status: 'Online',
@@ -851,6 +894,7 @@ app.get('/', (req, res) => {
     apis: { total: API_KEYS.length, current: currentApiIndex },
     model: model,
     deployment: 'Railway',
+    currentDateTime: currentDateTime,
     endpoints: {
       webhook: 'POST /webhook',
       health: 'GET /health',
@@ -860,7 +904,7 @@ app.get('/', (req, res) => {
       conversations: 'GET /conversations',
       produtos: 'GET/POST/PUT/DELETE /produtos'
     },
-    note: 'A rota /ping agora executa keep-alive do MySQL para evitar que durma no Railway'
+    note: 'A IA agora tem acesso à data e hora atual para melhor atendimento'
   });
 });
 
@@ -874,11 +918,13 @@ async function startServer() {
   
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
+    const currentDateTime = getCurrentDateTime();
     console.log(`🎉 Servidor rodando na porta ${PORT}`);
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🛍️  Gerenciar produtos: GET/POST/PUT/DELETE /produtos`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     console.log(`🔋 Keep-alive MySQL: ✅ ATIVO via rota /ping`);
+    console.log(`📅 Data/Hora do servidor: ${currentDateTime.full}`);
     
     console.log('\n🎯 SISTEMA DE PRODUTOS DINÂMICOS CONFIGURADO:');
     console.log(`   ✅ Tabela produtos_pronta_entrega criada/verificada`);
@@ -886,6 +932,7 @@ async function startServer() {
     console.log(`   ✅ APIs REST para gerenciamento`);
     console.log(`   ✅ Fallback para produtos padrão se MySQL falhar`);
     console.log(`   ✅ Sistema keep-alive MySQL para evitar dormência`);
+    console.log(`   ✅ Data e hora disponíveis para a IA`);
   });
 }
 
