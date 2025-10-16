@@ -1042,32 +1042,58 @@ app.delete('/produtos/:id', async (req, res) => {
 });
 
 // Rotas para pedidos - VERSÃO ATUALIZADA
-app.get('/pedidos', async (req, res) => {
-  if (!mysqlEnabled || !pool) {
-    return res.status(500).json({ error: 'MySQL não disponível' });
-  }
-
+// Rota de diagnóstico do banco de dados
+app.get('/diagnostico', async (req, res) => {
   try {
-    const [rows] = await pool.execute(`
-      SELECT *, DATE_FORMAT(created_at, '%d/%m/%Y %H:%i') as data_pedido 
-      FROM pedidos 
-      ORDER BY created_at DESC
-    `);
-    
-    // Parse do JSON dos produtos
-    const pedidos = rows.map(pedido => ({
-      ...pedido,
-      produtos_json: JSON.parse(pedido.produtos_json)
-    }));
-    
+    const diagnostic = {
+      mysql_enabled: mysqlEnabled,
+      pool_available: !!pool,
+      current_time: getCurrentDateTime(),
+      api_keys: API_KEYS.length
+    };
+
+    if (mysqlEnabled && pool) {
+      try {
+        // Testar conexão
+        const [testResult] = await pool.execute('SELECT 1 as test');
+        diagnostic.connection_test = 'OK';
+        
+        // Contar registros nas tabelas
+        const [pedidosCount] = await pool.execute('SELECT COUNT(*) as total FROM pedidos');
+        const [conversationsCount] = await pool.execute('SELECT COUNT(*) as total FROM conversations');
+        const [produtosCount] = await pool.execute('SELECT COUNT(*) as total FROM produtos_pronta_entrega');
+        
+        diagnostic.table_counts = {
+          pedidos: pedidosCount[0].total,
+          conversations: conversationsCount[0].total,
+          produtos: produtosCount[0].total
+        };
+
+        // Verificar estrutura da tabela pedidos
+        const [columns] = await pool.execute("SHOW COLUMNS FROM pedidos");
+        diagnostic.pedidos_columns = columns.map(col => ({
+          name: col.Field,
+          type: col.Type,
+          null: col.Null,
+          key: col.Key
+        }));
+
+      } catch (dbError) {
+        diagnostic.connection_test = 'ERROR: ' + dbError.message;
+      }
+    }
+
     res.json({
       status: 'success',
-      count: pedidos.length,
-      data: pedidos
+      diagnostic: diagnostic
     });
+
   } catch (error) {
-    console.error('Erro ao buscar pedidos:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
+    console.error('Erro no diagnóstico:', error);
+    res.status(500).json({ 
+      error: 'Erro no diagnóstico',
+      details: error.message 
+    });
   }
 });
 
