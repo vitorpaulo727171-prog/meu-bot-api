@@ -90,13 +90,6 @@ function getCurrentDateTime() {
   };
 }
 
-// Função para gerar ID do pedido
-function generateOrderId() {
-  const timestamp = Date.now().toString().slice(-6);
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `MS${timestamp}${random}`;
-}
-
 // Função para obter o cliente atual
 function getCurrentClient() {
   const token = API_KEYS[currentApiIndex];
@@ -246,245 +239,6 @@ async function getProntaEntregaProducts() {
   }
 }
 
-// Função para extrair produtos do texto
-function extrairProdutosDoTexto(textoProdutos) {
-  const produtos = [];
-  const linhas = textoProdutos.split('\n').filter(linha => linha.trim());
-  
-  for (const linha of linhas) {
-    // Padrões comuns: "2x Brownie Ferrero", "1x Dindin Oreo R$ 5,50", etc.
-    const matchQuantidade = linha.match(/(\d+)x\s+([^]+?)(?:\s*R\$\s*([\d,]+))?/i);
-    
-    if (matchQuantidade) {
-      const quantidade = parseInt(matchQuantidade[1]);
-      const nome = matchQuantidade[2].trim();
-      const precoUnitario = matchQuantidade[3] ? parseFloat(matchQuantidade[3].replace(',', '.')) : 0;
-      
-      produtos.push({
-        nome: nome,
-        quantidade: quantidade,
-        preco_unitario: precoUnitario,
-        subtotal: precoUnitario * quantidade
-      });
-    } else {
-      // Tentar outros padrões
-      const matchSemQuantidade = linha.match(/^[^-]*?([^]+?)\s*R\$\s*([\d,]+)/i);
-      if (matchSemQuantidade) {
-        produtos.push({
-          nome: matchSemQuantidade[1].trim(),
-          quantidade: 1,
-          preco_unitario: parseFloat(matchSemQuantidade[2].replace(',', '.')),
-          subtotal: parseFloat(matchSemQuantidade[2].replace(',', '.'))
-        });
-      }
-    }
-  }
-  
-  return produtos;
-}
-
-// Função para processar pedido - VERSÃO MELHORADA
-async function processarPedido(aiResponse, sessionId, senderName, groupName, isMessageFromGroup) {
-  try {
-    // Padrões para detectar pedido confirmado - mais flexível
-    const padraoPedido = /✅ PEDIDO CONFIRMADO|PEDIDO CONFIRMADO|pedido confirmado|✅ Pedido Confirmado/i;
-    
-    if (!padraoPedido.test(aiResponse)) {
-      return null; // Não é um pedido confirmado
-    }
-
-    console.log('🛒 Detectando pedido na resposta da IA...');
-
-    // Extrair ID do pedido
-    const idMatch = aiResponse.match(/#MS(\w+)|ID.*?(\w+)$/mi);
-    const pedidoId = idMatch ? (idMatch[1] || idMatch[2] || generateOrderId()) : generateOrderId();
-
-    // Tentar extrair informações específicas
-    let produtosTexto = '';
-    let valorTotal = 0;
-    let formaPagamento = 'PIX';
-    let formaEntrega = 'Retirada Local';
-    let observacoes = '';
-
-    // Extrair produtos - método mais flexível
-    const produtosSection = aiResponse.split('Produtos:')[1];
-    if (produtosSection) {
-      const endSection = produtosSection.split('Valor total')[0] || produtosSection.split('Forma de pagamento')[0] || produtosSection;
-      produtosTexto = endSection.trim();
-    }
-
-    // Extrair valor total
-    const valorMatch = aiResponse.match(/Valor total:\s*R\$\s*([\d,\.]+)/i) || 
-                      aiResponse.match(/Total:\s*R\$\s*([\d,\.]+)/i);
-    if (valorMatch) {
-      valorTotal = parseFloat(valorMatch[1].replace('.', '').replace(',', '.'));
-    }
-
-    // Extrair forma de pagamento
-    const pagamentoMatch = aiResponse.match(/Forma de pagamento:\s*([^\n]+)/i) || 
-                          aiResponse.match(/Pagamento:\s*([^\n]+)/i);
-    if (pagamentoMatch) {
-      formaPagamento = pagamentoMatch[1].trim();
-    }
-
-    // Extrair forma de entrega
-    const entregaMatch = aiResponse.match(/Entrega:\s*([^\n]+)/i);
-    if (entregaMatch) {
-      formaEntrega = entregaMatch[1].trim();
-    }
-
-    // Extrair observações
-    const obsMatch = aiResponse.match(/Observações:\s*([^]*?)(?=$|\n\n)/i);
-    if (obsMatch) {
-      observacoes = obsMatch[1].trim();
-    }
-
-    // Processar produtos individuais
-    const produtos = produtosTexto ? extrairProdutosDoTexto(produtosTexto) : [];
-
-    // Se não conseguiu extrair produtos, criar um registro básico
-    if (produtos.length === 0) {
-      console.log('⚠️  Não foi possível extrair produtos específicos, criando registro básico do pedido');
-      produtos.push({
-        nome: 'Pedido confirmado (detalhes na mensagem completa)',
-        quantidade: 1,
-        preco_unitario: valorTotal > 0 ? valorTotal : 0,
-        subtotal: valorTotal > 0 ? valorTotal : 0
-      });
-    }
-
-    // Calcular valor total se não foi extraído
-    if (valorTotal === 0 && produtos.length > 0) {
-      valorTotal = produtos.reduce((total, produto) => total + produto.subtotal, 0);
-    }
-
-    const pedidoData = {
-      session_id: sessionId,
-      sender_name: senderName,
-      group_name: groupName || '',
-      is_group_message: isMessageFromGroup ? 1 : 0,
-      produtos_json: JSON.stringify(produtos),
-      valor_total: valorTotal,
-      forma_pagamento: formaPagamento,
-      forma_entrega: formaEntrega,
-      observacoes: observacoes,
-      status: 'confirmado',
-      resposta_completa: aiResponse, // Armazena a mensagem completa
-      pedido_id: pedidoId // Armazena o ID do pedido
-    };
-
-    console.log(`🛒 Pedido processado: ${produtos.length} produtos, R$ ${valorTotal}, ID: ${pedidoId}`);
-    return pedidoData;
-
-  } catch (error) {
-    console.error('❌ Erro ao processar pedido:', error);
-    return null;
-  }
-}
-
-// Função para salvar pedido no banco - VERSÃO ATUALIZADA
-async function salvarPedido(pedidoData) {
-  if (!mysqlEnabled || !pool) {
-    console.log('⚠️  MySQL não disponível, pulando salvamento do pedido');
-    return null;
-  }
-
-  try {
-    console.log(`💾 Salvando pedido no banco...`);
-    
-    const [result] = await pool.execute(
-      `INSERT INTO pedidos 
-       (session_id, sender_name, group_name, is_group_message, produtos_json, valor_total, 
-        forma_pagamento, forma_entrega, observacoes, status, resposta_completa, pedido_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        pedidoData.session_id,
-        pedidoData.sender_name,
-        pedidoData.group_name,
-        pedidoData.is_group_message,
-        pedidoData.produtos_json,
-        pedidoData.valor_total,
-        pedidoData.forma_pagamento,
-        pedidoData.forma_entrega,
-        pedidoData.observacoes,
-        pedidoData.status,
-        pedidoData.resposta_completa,
-        pedidoData.pedido_id
-      ]
-    );
-    
-    const pedidoId = result.insertId;
-    console.log(`✅ Pedido salvo - ID: ${pedidoId}, Código: ${pedidoData.pedido_id}`);
-    
-    // Atualizar estoque dos produtos apenas se conseguiu extrair produtos específicos
-    try {
-      const produtos = JSON.parse(pedidoData.produtos_json);
-      if (produtos.length > 0 && produtos[0].nome !== 'Pedido confirmado (detalhes na mensagem completa)') {
-        await atualizarEstoquePedido(produtos);
-      }
-    } catch (estoqueError) {
-      console.log('⚠️  Não foi possível atualizar estoque, mas o pedido foi salvo');
-    }
-    
-    return { id: pedidoId, codigo: pedidoData.pedido_id };
-    
-  } catch (error) {
-    console.error('❌ Erro ao salvar pedido:', error.message);
-    return null;
-  }
-}
-
-// Função para atualizar estoque
-async function atualizarEstoquePedido(produtos) {
-  try {
-    for (const produto of produtos) {
-      // Buscar produto no banco pelo nome (aproximado)
-      const [rows] = await pool.execute(
-        `SELECT id, estoque FROM produtos_pronta_entrega 
-         WHERE nome LIKE ? AND estoque > 0`,
-        [`%${produto.nome}%`]
-      );
-      
-      if (rows.length > 0) {
-        const produtoDb = rows[0];
-        const novoEstoque = produtoDb.estoque - produto.quantidade;
-        
-        await pool.execute(
-          `UPDATE produtos_pronta_entrega SET estoque = ? WHERE id = ?`,
-          [Math.max(0, novoEstoque), produtoDb.id]
-        );
-        
-        console.log(`📦 Estoque atualizado: ${produto.nome} - ${produtoDb.estoque} → ${novoEstoque}`);
-      }
-    }
-  } catch (error) {
-    console.error('❌ Erro ao atualizar estoque:', error.message);
-  }
-}
-
-// Função para enviar notificação de novo pedido
-async function enviarNotificacaoPedido(pedidoInfo, pedidoData) {
-  try {
-    const produtos = JSON.parse(pedidoData.produtos_json);
-    const mensagemNotificacao = `
-🆕 NOVO PEDIDO #${pedidoInfo.codigo}
-👤 Cliente: ${pedidoData.sender_name}
-📦 ${produtos.length} itens
-💰 Total: R$ ${pedidoData.valor_total}
-💳 Pagamento: ${pedidoData.forma_pagamento}
-🚚 Entrega: ${pedidoData.forma_entrega}
-⏰ Horário: ${getCurrentDateTime().full}
-📝 Status: ${pedidoData.status}
-    `.trim();
-
-    console.log('🔔 Notificação de pedido:\n', mensagemNotificacao);
-    console.log('📄 Mensagem completa armazenada no banco de dados');
-    
-  } catch (error) {
-    console.error('❌ Erro ao enviar notificação:', error);
-  }
-}
-
 async function initializeDatabase() {
   console.log('🔄 Inicializando MySQL para Railway...');
   
@@ -541,29 +295,6 @@ async function initializeDatabase() {
         preco DECIMAL(10,2) NOT NULL,
         estoque INT NOT NULL,
         disponibilidade ENUM('Pronta Entrega') DEFAULT 'Pronta Entrega'
-      )
-    `);
-    
-    // Cria a tabela pedidos se não existir - VERSÃO ATUALIZADA
-    console.log('🔄 Verificando/Criando tabela pedidos...');
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS pedidos (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        pedido_id VARCHAR(50) NOT NULL,
-        session_id VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255) NOT NULL,
-        group_name VARCHAR(255),
-        is_group_message BOOLEAN DEFAULT FALSE,
-        produtos_json JSON NOT NULL,
-        valor_total DECIMAL(10,2) NOT NULL,
-        forma_pagamento ENUM('PIX', 'Dinheiro') DEFAULT 'PIX',
-        forma_entrega ENUM('Retirada Local', 'UberFlash') DEFAULT 'Retirada Local',
-        status ENUM('confirmado', 'preparando', 'pronto', 'entregue', 'cancelado') DEFAULT 'confirmado',
-        observacoes TEXT,
-        resposta_completa TEXT NOT NULL,
-        data_retirada DATETIME,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
     
@@ -844,7 +575,7 @@ Peça a forma de entrega (Retirada Local ou UberFlash)
 Quando o cliente confirmar o pedido, gere o resumo:
 
 ✅ PEDIDO CONFIRMADO  
-ID do Pedido: #MS${generateOrderId()}  
+ID do Pedido: #MSXXXX  
 Produtos: [listar com quantidade e preço]  
 Valor total: R$ [valor]  
 Forma de pagamento: [PIX ou Dinheiro]  
@@ -910,20 +641,6 @@ Se o cliente enrolar, pressione educadamente com frases como:
       receiveMessageApp
     });
 
-    // 🛒 Processar pedido se detectado - MÉTODO MELHORADO
-    const sessionId = generateSessionId(senderName, groupName, isMessageFromGroup);
-    const pedidoData = await processarPedido(aiResponse, sessionId, senderName, groupName, isMessageFromGroup);
-
-    if (pedidoData) {
-      const pedidoInfo = await salvarPedido(pedidoData);
-      if (pedidoInfo) {
-        console.log(`🎉 Pedido #${pedidoInfo.id} registrado com sucesso! Código: ${pedidoInfo.codigo}`);
-        
-        // Enviar notificação (opcional)
-        await enviarNotificacaoPedido(pedidoInfo, pedidoData);
-      }
-    }
-
     if (savedId) {
       await cleanupOldMessages(senderName, groupName, isMessageFromGroup);
     }
@@ -953,6 +670,8 @@ Se o cliente enrolar, pressione educadamente com frases como:
     });
   }
 });
+
+// ... (o restante do código permanece igual - rotas administrativas, inicialização do servidor, etc.)
 
 // Rotas administrativas para gerenciar produtos
 app.get('/produtos', async (req, res) => {
@@ -1041,153 +760,6 @@ app.delete('/produtos/:id', async (req, res) => {
   }
 });
 
-// Rotas para pedidos - VERSÃO ATUALIZADA
-// Rota de diagnóstico do banco de dados
-app.get('/diagnostico', async (req, res) => {
-  try {
-    const diagnostic = {
-      mysql_enabled: mysqlEnabled,
-      pool_available: !!pool,
-      current_time: getCurrentDateTime(),
-      api_keys: API_KEYS.length
-    };
-
-    if (mysqlEnabled && pool) {
-      try {
-        // Testar conexão
-        const [testResult] = await pool.execute('SELECT 1 as test');
-        diagnostic.connection_test = 'OK';
-        
-        // Contar registros nas tabelas
-        const [pedidosCount] = await pool.execute('SELECT COUNT(*) as total FROM pedidos');
-        const [conversationsCount] = await pool.execute('SELECT COUNT(*) as total FROM conversations');
-        const [produtosCount] = await pool.execute('SELECT COUNT(*) as total FROM produtos_pronta_entrega');
-        
-        diagnostic.table_counts = {
-          pedidos: pedidosCount[0].total,
-          conversations: conversationsCount[0].total,
-          produtos: produtosCount[0].total
-        };
-
-        // Verificar estrutura da tabela pedidos
-        const [columns] = await pool.execute("SHOW COLUMNS FROM pedidos");
-        diagnostic.pedidos_columns = columns.map(col => ({
-          name: col.Field,
-          type: col.Type,
-          null: col.Null,
-          key: col.Key
-        }));
-
-      } catch (dbError) {
-        diagnostic.connection_test = 'ERROR: ' + dbError.message;
-      }
-    }
-
-    res.json({
-      status: 'success',
-      diagnostic: diagnostic
-    });
-
-  } catch (error) {
-    console.error('Erro no diagnóstico:', error);
-    res.status(500).json({ 
-      error: 'Erro no diagnóstico',
-      details: error.message 
-    });
-  }
-});
-
-// Buscar pedido por ID específico
-app.get('/pedidos/:id', async (req, res) => {
-  if (!mysqlEnabled || !pool) {
-    return res.status(500).json({ error: 'MySQL não disponível' });
-  }
-
-  try {
-    const { id } = req.params;
-    
-    const [rows] = await pool.execute(`
-      SELECT *, DATE_FORMAT(created_at, '%d/%m/%Y %H:%i') as data_pedido 
-      FROM pedidos 
-      WHERE id = ? OR pedido_id = ?
-    `, [id, id]);
-    
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Pedido não encontrado' });
-    }
-    
-    const pedido = {
-      ...rows[0],
-      produtos_json: JSON.parse(rows[0].produtos_json)
-    };
-    
-    res.json({
-      status: 'success',
-      data: pedido
-    });
-  } catch (error) {
-    console.error('Erro ao buscar pedido:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
-  }
-});
-
-// Atualizar status do pedido
-app.put('/pedidos/:id/status', async (req, res) => {
-  if (!mysqlEnabled || !pool) {
-    return res.status(500).json({ error: 'MySQL não disponível' });
-  }
-
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-    
-    await pool.execute(
-      'UPDATE pedidos SET status = ? WHERE id = ? OR pedido_id = ?',
-      [status, id, id]
-    );
-    
-    res.json({
-      status: 'success',
-      message: 'Status do pedido atualizado'
-    });
-  } catch (error) {
-    console.error('Erro ao atualizar pedido:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
-  }
-});
-
-// Estatísticas de pedidos
-app.get('/pedidos/estatisticas', async (req, res) => {
-  if (!mysqlEnabled || !pool) {
-    return res.status(500).json({ error: 'MySQL não disponível' });
-  }
-
-  try {
-    const [total] = await pool.execute('SELECT COUNT(*) as total FROM pedidos');
-    const [hoje] = await pool.execute(`
-      SELECT COUNT(*) as hoje FROM pedidos 
-      WHERE DATE(created_at) = CURDATE()
-    `);
-    const [revenue] = await pool.execute('SELECT SUM(valor_total) as revenue FROM pedidos');
-    const [statusCounts] = await pool.execute(`
-      SELECT status, COUNT(*) as count FROM pedidos GROUP BY status
-    `);
-    
-    res.json({
-      status: 'success',
-      data: {
-        total_pedidos: total[0].total,
-        pedidos_hoje: hoje[0].hoje,
-        faturamento_total: revenue[0].revenue || 0,
-        status: statusCounts
-      }
-    });
-  } catch (error) {
-    console.error('Erro ao buscar estatísticas:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
-  }
-});
-
 // Rotas existentes (conversations, status, rotate-api, ping, health) mantidas iguais
 app.get('/conversations', async (req, res) => {
   if (!mysqlEnabled || !pool) {
@@ -1265,7 +837,7 @@ app.get('/ping', async (req, res) => {
       model: model,
       timestamp: new Date().toISOString(),
       currentDateTime: getCurrentDateTime(),
-      service: 'Railway MySQL + Multi-API + Sistema de Pedidos Aprimorado',
+      service: 'Railway MySQL + Multi-API',
       mysql_keep_alive: mysqlAlive
     });
   } catch (error) {
@@ -1318,7 +890,7 @@ app.get('/', (req, res) => {
   const currentDateTime = getCurrentDateTime();
   
   res.json({ 
-    service: 'AutoReply Webhook com Multi-API + MySQL + Sistema de Pedidos Aprimorado',
+    service: 'AutoReply Webhook com Multi-API + MySQL + Produtos Dinâmicos',
     status: 'Online',
     mysql: mysqlEnabled ? 'CONECTADO' : 'DESCONECTADO',
     apis: { total: API_KEYS.length, current: currentApiIndex },
@@ -1332,28 +904,15 @@ app.get('/', (req, res) => {
       ping: 'GET /ping (com keep-alive MySQL)',
       'rotate-api': 'POST /rotate-api',
       conversations: 'GET /conversations',
-      produtos: 'GET/POST/PUT/DELETE /produtos',
-      pedidos: 'GET /pedidos',
-      'pedido-especifico': 'GET /pedidos/:id',
-      'pedidos-estatisticas': 'GET /pedidos/estatisticas',
-      'atualizar-status': 'PUT /pedidos/:id/status'
+      produtos: 'GET/POST/PUT/DELETE /produtos'
     },
-    features: {
-      'multi-api': 'Rotacionamento automático de APIs',
-      'mysql': 'Banco de dados para conversas e produtos',
-      'produtos-dinamicos': 'Gerenciamento de estoque em tempo real',
-      'sistema-pedidos': 'Registro automático de pedidos aprimorado',
-      'resposta-completa': 'Armazena mensagem completa da IA',
-      'id-pedido': 'Gera e armazena ID único do pedido',
-      'extracao-flexivel': 'Extrai dados mesmo com variações no texto'
-    },
-    note: 'Sistema aprimorado com armazenamento completo da resposta da IA'
+    note: 'A IA agora tem acesso à data e hora atual para melhor atendimento'
   });
 });
 
 // Inicializa o servidor
 async function startServer() {
-  console.log('🚀 Iniciando servidor AutoReply com Sistema de Pedidos Aprimorado...');
+  console.log('🚀 Iniciando servidor AutoReply com Produtos Dinâmicos...');
   console.log(`🔑 ${API_KEYS.length} chaves API configuradas`);
   console.log(`🤖 Modelo: ${model}`);
   
@@ -1365,20 +924,17 @@ async function startServer() {
     console.log(`🎉 Servidor rodando na porta ${PORT}`);
     console.log(`🌐 Webhook: POST /webhook`);
     console.log(`🛍️  Gerenciar produtos: GET/POST/PUT/DELETE /produtos`);
-    console.log(`📦 Gerenciar pedidos: GET /pedidos`);
-    console.log(`🔍 Buscar pedido específico: GET /pedidos/:id`);
-    console.log(`📊 Estatísticas: GET /pedidos/estatisticas`);
     console.log(`🗃️  MySQL: ${mysqlEnabled ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
     console.log(`🔋 Keep-alive MySQL: ✅ ATIVO via rota /ping`);
     console.log(`📅 Data/Hora do servidor: ${currentDateTime.full}`);
     
-    console.log('\n🎯 SISTEMA DE PEDIDOS APRIMORADO:');
-    console.log(`   ✅ Armazenamento da mensagem completa da IA`);
-    console.log(`   ✅ Geração automática de ID do pedido`);
-    console.log(`   ✅ Extração flexível de dados do pedido`);
-    console.log(`   ✅ Fallback quando não consegue extrair produtos`);
-    console.log(`   ✅ Busca de pedido por ID ou código`);
-    console.log(`   ✅ Estatísticas detalhadas por status`);
+    console.log('\n🎯 SISTEMA DE PRODUTOS DINÂMICOS CONFIGURADO:');
+    console.log(`   ✅ Tabela produtos_pronta_entrega criada/verificada`);
+    console.log(`   ✅ Consulta automática a cada mensagem`);
+    console.log(`   ✅ APIs REST para gerenciamento`);
+    console.log(`   ✅ Fallback para produtos padrão se MySQL falhar`);
+    console.log(`   ✅ Sistema keep-alive MySQL para evitar dormência`);
+    console.log(`   ✅ Data e hora disponíveis para a IA`);
   });
 }
 
