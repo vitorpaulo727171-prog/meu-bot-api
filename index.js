@@ -10,23 +10,33 @@ app.use(express.json());
 // ============================================
 const IPTV_APIS = [
   {
-    name: 'OCTANE SEM ADULTO',
+    id: 1,
+    name: 'OCTANE COM ADULTO',
+    url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/o231qMN14q'
+  },
+  {
+    id: 2,
+    name: 'OBA W2 COM ADULTO',
+    url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/aYB1wQNDvm'
+  },
+  {
+    id: 3,
+    name: 'UNITV HORIZON',
     url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/rlKWOzlDzo'
   },
   {
-    name: 'OCTANE COM ADULTO',
+    id: 4,
+    name: 'HORIZON COM ADULTO',
     url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/qK4Wr0YLeN'
   },
   {
-    name: 'OBA W2 SEM ADULTO',
-    url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/B0VDVY2LK3'
-  },
-  {
-    name: 'OBA W2 COM ADULTO',
+    id: 5,
+    name: 'OLYMPUS PLAYER COM ADULTO',
     url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/PkaL4RJWgr'
   },
   {
-    name: 'OLYMPUS PLAYER',
+    id: 6,
+    name: 'BOX PLAYER OFICIAL',
     url: 'https://multserver.dashboardgs.store/api/chatbot/MeWeEg8WnN/nVrW8M61Ka'
   }
 ];
@@ -166,8 +176,37 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
 }
 
 // ============================================
-// 5. FUNÇÕES DE IPTV - VS SOLUÇÕES
+// 5. FUNÇÕES DE IPTV - VS SOLUÇÕES (extração melhorada)
 // ============================================
+function extractM3uLinks(reply) {
+  const links = [];
+  const regex = /https?:\/\/[^\s]+get\.php\?username=[^&]+&password=[^&]+&type=m3u_plus[^\s]*/gi;
+  const found = reply.match(regex);
+  if (found) {
+    // Pega também os nomes antes de cada link se existirem
+    const lines = reply.split('\n');
+    let currentName = null;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.includes('Link (M3U)')) {
+        const nameMatch = trimmed.match(/Link \(M3U\) ([^:]+):/);
+        if (nameMatch) currentName = nameMatch[1].trim();
+        // Procura a URL na mesma linha
+        const urlMatch = trimmed.match(/https?:\/\/[^\s]+/);
+        if (urlMatch) {
+          links.push({ name: currentName || 'M3U', url: urlMatch[0] });
+          currentName = null;
+        }
+      }
+    }
+    // Se não encontrou nomes, pega só as URLs
+    if (links.length === 0) {
+      found.forEach(url => links.push({ name: 'M3U', url }));
+    }
+  }
+  return links;
+}
+
 async function generateIptvTest(apiIndex = 0) {
   const api = IPTV_APIS[apiIndex % IPTV_APIS.length];
   console.log(`📡 Gerando teste IPTV via: ${api.name} (${api.url})`);
@@ -186,7 +225,7 @@ async function generateIptvTest(apiIndex = 0) {
     const data = await response.json();
     console.log(`✅ Teste IPTV gerado com sucesso - ${api.name}`);
 
-    // Extrai as informações principais
+    // Extrai campos padrão
     const dns = data.dns || 'Não informado';
     const username = data.username || 'Não informado';
     const password = data.password || 'Não informado';
@@ -194,11 +233,15 @@ async function generateIptvTest(apiIndex = 0) {
     const expiresAt = data.expiresAtFormatted || data.expiresAt || 'Não informado';
     const connections = data.connections || 1;
     const payUrl = data.payUrl || '';
+    const reply = data.reply || '';
 
-    // Mensagem formatada para o cliente
+    // Extrai links M3U com nomes
+    const m3uLinks = extractM3uLinks(reply);
+
+    // Monta mensagem
     let message = `📺 *TESTE IPTV - VS SOLUÇÕES*\n\n`;
     message += `📦 *Plano:* ${packageName}\n`;
-    message += `🏷️ *API:* ${api.name}\n`;
+    message += `🏷️ *Servidor:* ${api.name}\n`;
     message += `🔗 *DNS:* ${dns}\n`;
     message += `👤 *Usuário:* ${username}\n`;
     message += `🔒 *Senha:* ${password}\n`;
@@ -209,66 +252,104 @@ async function generateIptvTest(apiIndex = 0) {
       message += `💳 *Assinar/Renovar:* ${payUrl}\n\n`;
     }
 
-    // Links M3U (extraídos do reply se existir)
-    if (data.reply) {
-      const m3uLinks = data.reply.match(/https?:\/\/[^\s]+get\.php\?username=[^&]+&password=[^&]+&type=m3u_plus[^\s]*/gi);
-      if (m3uLinks && m3uLinks.length > 0) {
-        message += `📺 *Links M3U:*\n`;
-        m3uLinks.forEach((link, i) => {
-          const emoji = ['🟢', '🔴', '🟡'][i] || '🔵';
-          message += `${emoji} ${link}\n`;
-        });
-        message += `\n`;
+    // Links M3U
+    if (m3uLinks.length > 0) {
+      message += `📺 *Links M3U:*\n`;
+      const emojis = ['🟢', '🔴', '🟡', '🟠', '🔵', '🟣'];
+      m3uLinks.forEach((item, i) => {
+        const emoji = emojis[i % emojis.length];
+        message += `${emoji} *${item.name}*: ${item.url}\n`;
+      });
+      message += `\n`;
+    }
+
+    // Aplicativos - extração genérica
+    // 1. MultServer MAX / PLUS
+    const appRegex = /📺 APLICATIVO ANDROID: (MultServer\s*(?:MAX|PLUS)).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?Código Downloader:\s*([^\s*]+).*?APLICATIVO:\s*([^\s*]+)/is;
+    const appMatch = reply.match(appRegex);
+    if (appMatch) {
+      message += `📱 *${appMatch[1]}*\n`;
+      message += `👤 Usuário: ${appMatch[2]}\n`;
+      message += `🔒 Senha: ${appMatch[3]}\n`;
+      message += `📥 Downloader: ${appMatch[4]}\n`;
+      message += `📲 App: ${appMatch[5]}\n\n`;
+    }
+
+    // 2. Assist plus / PlaySim
+    const assistRegex = /Assist plus.*?Código:\s*([^\s*]+).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DOWLOADER:\s*([^\s*]+)/is;
+    const assistMatch = reply.match(assistRegex);
+    if (assistMatch) {
+      message += `📱 *Assist Plus / PlaySim*\n`;
+      message += `🆔 Código: ${assistMatch[1]}\n`;
+      message += `👤 Usuário: ${assistMatch[2]}\n`;
+      message += `🔒 Senha: ${assistMatch[3]}\n`;
+      message += `📥 Downloader: ${assistMatch[4]}\n\n`;
+    }
+
+    // 3. VIZZION PLAY
+    const vizzionRegex = /VIZZION PLAY.*?Login:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DOWLOADER:\s*([^\s*]+)/is;
+    const vizzionMatch = reply.match(vizzionRegex);
+    if (vizzionMatch) {
+      message += `📱 *VIZZION PLAY*\n`;
+      message += `👤 Usuário: ${vizzionMatch[1]}\n`;
+      message += `🔒 Senha: ${vizzionMatch[2]}\n`;
+      message += `📥 Downloader: ${vizzionMatch[3]}\n\n`;
+    }
+
+    // 4. IPTV Smarters
+    const smartersRegex = /IPTV SMARTERS.*?Nome:\s*([^\n*]+).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DNS SMARTERS:\s*([^\s*]+)/is;
+    const smartersMatch = reply.match(smartersRegex);
+    if (smartersMatch) {
+      message += `📱 *IPTV Smarters*\n`;
+      message += `📺 Nome: ${smartersMatch[1].trim()}\n`;
+      message += `👤 Usuário: ${smartersMatch[2]}\n`;
+      message += `🔒 Senha: ${smartersMatch[3]}\n`;
+      message += `🔗 DNS: ${smartersMatch[4]}\n\n`;
+    }
+
+    // 5. DNS STB / SmartUp
+    const stbRegex = /DNS STB \/ SmartUp:\s*([^\s]+)/i;
+    const stbMatch = reply.match(stbRegex);
+    if (stbMatch) {
+      message += `📡 *DNS STB / SmartUp:* ${stbMatch[1]}\n\n`;
+    }
+
+    // 6. Loja de aplicativos
+    const storeRegex = /LOJA DE APLICATIVOS:\s*([^\s]+)/i;
+    const storeMatch = reply.match(storeRegex);
+    if (storeMatch) {
+      message += `🛒 *Loja de Aplicativos:* ${storeMatch[1]}\n\n`;
+    }
+
+    // Caso especial UNITV (não tem aplicativos padrão, mas tem código de ativação)
+    if (api.name.includes('UNITV')) {
+      const unitvRegex = /✅ CÓDIGO DE ATIVAÇÃO:\s*([^\s]+)/i;
+      const unitvMatch = reply.match(unitvRegex);
+      if (unitvMatch) {
+        message += `🔑 *Código de Ativação UNITV:* ${unitvMatch[1]}\n\n`;
+      }
+      const downloadRegex = /📥 DOWNLOAD:\s*([^\s]+)/i;
+      const downloadMatch = reply.match(downloadRegex);
+      if (downloadMatch) {
+        message += `📲 *Download:* ${downloadMatch[1]}\n`;
+      }
+      const downloaderRegex = /CÓDIGO DOWNLOADER:\s*([^\s]+)/i;
+      const downloaderMatch = reply.match(downloaderRegex);
+      if (downloaderMatch) {
+        message += `📥 *Downloader:* ${downloaderMatch[1]}\n\n`;
       }
     }
 
-    // Aplicativos (extraídos do reply se existir)
-    if (data.reply) {
-      const appMatches = data.reply.match(/📺 APLICATIVO ANDROID:.*?Usuário:\s*([^\s]+).*?Senha:\s*([^\s]+).*?Código Downloader:\s*([^\s]+).*?APLICATIVO:\s*([^\s]+)/is);
-      if (appMatches) {
-        message += `📱 *MultServer MAX*\n`;
-        message += `👤 Usuário: ${appMatches[1]}\n`;
-        message += `🔒 Senha: ${appMatches[2]}\n`;
-        message += `📥 Downloader: ${appMatches[3]}\n`;
-        message += `📲 App: ${appMatches[4]}\n\n`;
-      }
-
-      const assistMatch = data.reply.match(/Assist plus.*?Código:\s*([^\s]+).*?Usuário:\s*([^\s]+).*?Senha:\s*([^\s]+).*?DOWLOADER:\s*([^\s]+)/is);
-      if (assistMatch) {
-        message += `📱 *Assist Plus / PlaySim*\n`;
-        message += `🆔 Código: ${assistMatch[1]}\n`;
-        message += `👤 Usuário: ${assistMatch[2]}\n`;
-        message += `🔒 Senha: ${assistMatch[3]}\n`;
-        message += `📥 Downloader: ${assistMatch[4]}\n\n`;
-      }
-
-      const vizzionMatch = data.reply.match(/VIZZION PLAY.*?Login:\s*([^\s]+).*?Senha:\s*([^\s]+).*?DOWLOADER:\s*([^\s]+)/is);
-      if (vizzionMatch) {
-        message += `📱 *VIZZION PLAY*\n`;
-        message += `👤 Usuário: ${vizzionMatch[1]}\n`;
-        message += `🔒 Senha: ${vizzionMatch[2]}\n`;
-        message += `📥 Downloader: ${vizzionMatch[3]}\n\n`;
-      }
-
-      const smartersMatch = data.reply.match(/IPTV SMARTERS.*?Nome:\s*([^\n]+).*?Usuário:\s*([^\s]+).*?Senha:\s*([^\s]+).*?DNS SMARTERS:\s*([^\s]+)/is);
-      if (smartersMatch) {
-        message += `📱 *IPTV Smarters*\n`;
-        message += `📺 Nome: ${smartersMatch[1].trim()}\n`;
-        message += `👤 Usuário: ${smartersMatch[2]}\n`;
-        message += `🔒 Senha: ${smartersMatch[3]}\n`;
-        message += `🔗 DNS: ${smartersMatch[4]}\n\n`;
-      }
-
-      // Tenta extrair DNS STB / SmartUp
-      const stbMatch = data.reply.match(/DNS STB \/ SmartUp:\s*([^\s]+)/i);
-      if (stbMatch) {
-        message += `📡 *DNS STB / SmartUp:* ${stbMatch[1]}\n\n`;
-      }
-
-      // Loja de aplicativos
-      const storeMatch = data.reply.match(/LOJA DE APLICATIVOS:\s*([^\s]+)/i);
-      if (storeMatch) {
-        message += `🛒 *Loja de Aplicativos:* ${storeMatch[1]}\n\n`;
+    // Caso BOX PLAYER (mostra múltiplos códigos)
+    if (api.name.includes('BOX PLAYER')) {
+      const boxCodes = reply.match(/CÓDIGO ([^:]+):\s*([^\s]+)/gi);
+      if (boxCodes) {
+        message += `📱 *Códigos para aplicativos:*\n`;
+        boxCodes.forEach(code => {
+          const clean = code.replace(/[✅*]/g, '').trim();
+          message += `• ${clean}\n`;
+        });
+        message += `\n`;
       }
     }
 
@@ -281,7 +362,8 @@ async function generateIptvTest(apiIndex = 0) {
       success: true,
       message: message,
       raw: data,
-      apiName: api.name
+      apiName: api.name,
+      apiId: api.id
     };
 
   } catch (error) {
@@ -509,83 +591,82 @@ app.post('/webhook', async (req, res) => {
     const lowerMsg = senderMessage.toLowerCase().trim();
 
     // ==========================================
-    // DETECTA INTENÇÃO: LISTAR APIS DISPONÍVEIS
+    // 1. DETECTA INTENÇÃO: LISTAR APIS
     // ==========================================
-    if (lowerMsg.includes('apis') || lowerMsg.includes('lista') || lowerMsg.includes('opções') || lowerMsg.includes('quais')) {
-      let apiList = `📡 *APIS DE TESTE DISPONÍVEIS - VS SOLUÇÕES*\n\n`;
-      IPTV_APIS.forEach((api, index) => {
-        apiList += `${index + 1}. ${api.name}\n`;
+    if (lowerMsg.includes('apis') || lowerMsg.includes('lista') || lowerMsg.includes('opções') || lowerMsg.includes('quais') || lowerMsg.includes('servidores')) {
+      let apiList = `📡 *SERVIDORES DISPONÍVEIS - VS SOLUÇÕES*\n\n`;
+      IPTV_APIS.forEach(api => {
+        apiList += `${api.id}. ${api.name}\n`;
       });
-      apiList += `\n💡 Para gerar um teste, digite:\n`;
-      apiList += `"GERAR TESTE [NOME DA API]"`;
-      apiList += `\n\nExemplos:\n`;
-      apiList += `• GERAR TESTE OCTANE SEM ADULTO\n`;
-      apiList += `• GERAR TESTE OBA W2 COM ADULTO\n`;
-      apiList += `• GERAR TESTE OLYMPUS PLAYER`;
+      apiList += `\n💡 Digite o *número* do servidor para gerar seu teste.\n`;
+      apiList += `Exemplo: *2* para OBA W2 COM ADULTO`;
       aiResponse = apiList;
     }
 
     // ==========================================
-    // DETECTA INTENÇÃO: GERAR TESTE IPTV ESPECÍFICO
+    // 2. DETECTA INTENÇÃO: GERAR TESTE POR NÚMERO
     // ==========================================
-    else if (lowerMsg.includes('gerar teste') || lowerMsg.includes('teste ') || lowerMsg.includes('quero testar')) {
-      console.log(`🎯 Detectado pedido de teste IPTV`);
-
-      let selectedApiIndex = -1;
-
-      // Tenta encontrar qual API o usuário quer
-      for (let i = 0; i < IPTV_APIS.length; i++) {
-        const apiName = IPTV_APIS[i].name.toLowerCase();
-        if (lowerMsg.includes(apiName)) {
-          selectedApiIndex = i;
-          break;
+    else if (/^\d+$/.test(senderMessage.trim())) {
+      const number = parseInt(senderMessage.trim());
+      const api = IPTV_APIS.find(a => a.id === number);
+      if (api) {
+        console.log(`🎯 Gerando teste para servidor ${api.id} - ${api.name}`);
+        const testResult = await generateIptvTest(api.id - 1);
+        if (testResult.success) {
+          aiResponse = testResult.message;
+        } else {
+          // Tenta outros servidores em fallback
+          let fallbackResult = null;
+          for (let i = 0; i < IPTV_APIS.length; i++) {
+            if (i === api.id - 1) continue;
+            fallbackResult = await generateIptvTest(i);
+            if (fallbackResult.success) break;
+          }
+          if (fallbackResult && fallbackResult.success) {
+            aiResponse = `⚠️ O servidor escolhido não respondeu, mas geramos um teste em outro servidor:\n\n${fallbackResult.message}`;
+          } else {
+            aiResponse = `❌ Não foi possível gerar teste em nenhum servidor. Tente novamente.`;
+          }
         }
-      }
-
-      // Se não encontrou uma específica, usa a primeira
-      if (selectedApiIndex === -1) {
-        selectedApiIndex = 0;
-        console.log(`ℹ️ Nenhuma API específica detectada, usando: ${IPTV_APIS[0].name}`);
-      }
-
-      // Tenta gerar o teste (tenta a API escolhida, se falhar tenta as outras)
-      let testResult = null;
-      const startIndex = selectedApiIndex;
-      
-      for (let i = 0; i < IPTV_APIS.length; i++) {
-        const currentIndex = (startIndex + i) % IPTV_APIS.length;
-        testResult = await generateIptvTest(currentIndex);
-        if (testResult.success) break;
-      }
-
-      if (testResult && testResult.success) {
-        aiResponse = testResult.message;
       } else {
-        aiResponse = `❌ Desculpe, não foi possível gerar um teste agora. Todas as tentativas falharam. Tente novamente em alguns minutos.\n\n📡 Digite "APIS" para ver as opções disponíveis.`;
+        aiResponse = `❌ Número inválido. Digite *APIS* para ver a lista de servidores disponíveis.`;
       }
     }
 
     // ==========================================
-    // PERGUNTA SOBRE PLANOS
+    // 3. DETECTA INTENÇÃO: TESTE POR PALAVRA (sem número)
+    // ==========================================
+    else if (lowerMsg.includes('teste') || lowerMsg.includes('experimentar') || lowerMsg.includes('gratis') || lowerMsg.includes('grátis') || lowerMsg.includes('quero testar') || lowerMsg.includes('gerar')) {
+      // Se não mencionou número, oferece a lista
+      let apiList = `📡 *ESCOLHA O SERVIDOR PARA SEU TESTE - VS SOLUÇÕES*\n\n`;
+      IPTV_APIS.forEach(api => {
+        apiList += `${api.id}. ${api.name}\n`;
+      });
+      apiList += `\n💡 Digite o *número* correspondente para gerar seu teste imediatamente.`;
+      aiResponse = apiList;
+    }
+
+    // ==========================================
+    // 4. PERGUNTA SOBRE PLANOS
     // ==========================================
     else if (lowerMsg.includes('plano') || lowerMsg.includes('planos') || lowerMsg.includes('preço') || lowerMsg.includes('valor') || lowerMsg.includes('quanto custa') || lowerMsg.includes('preços')) {
       const plans = await getIptvPlans();
       if (plans) {
         aiResponse = plans;
       } else {
-        aiResponse = `📺 *Planos IPTV - VS SOLUÇÕES*\n\nTemos planos a partir de R$ 19,90/mês com mais de 2000 canais.\n\n💳 *Formas de pagamento:*\n• Pix\n• Cartão de crédito\n• Boleto\n\n📡 *Benefícios:*\n✅ Canais em HD/4K\n✅ Sem travamentos\n✅ Suporte 24/7\n✅ Compatível com todos os dispositivos\n\n📱 *Dispositivos:* Smart TV, Android, iOS, Firestick, PC e mais!\n\n💡 Para testar, digite: *GERAR TESTE*`;
+        aiResponse = `📺 *Planos IPTV - VS SOLUÇÕES*\n\nTemos planos a partir de R$ 19,90/mês com mais de 2000 canais.\n\n💳 *Formas de pagamento:*\n• Pix\n• Cartão de crédito\n• Boleto\n\n📡 *Benefícios:*\n✅ Canais em HD/4K\n✅ Sem travamentos\n✅ Suporte 24/7\n✅ Compatível com todos os dispositivos\n\n📱 *Dispositivos:* Smart TV, Android, iOS, Firestick, PC e mais!\n\n💡 Para testar, digite *APIS* para ver os servidores.`;
       }
     }
 
     // ==========================================
-    // DETECTA INTENÇÃO: SITE/DOWNLOAD
+    // 5. DETECTA INTENÇÃO: SITE/DOWNLOAD
     // ==========================================
     else if (lowerMsg.includes('site') || lowerMsg.includes('download') || lowerMsg.includes('aplicativo') || lowerMsg.includes('app') || lowerMsg.includes('baixar')) {
-      aiResponse = `📲 *VS SOLUÇÕES - Aplicativos e Downloads*\n\n📱 *Android:*\n• MultServer MAX - Código Downloader: 6469569\n• App: http://aftv.news/6469569\n\n📱 *Assist Plus / PlaySim:*\n• Código Downloader: 9465043\n\n📱 *VIZZION PLAY:*\n• Código Downloader: 5338196\n\n📱 *IPTV Smarters:*\n• Disponível nas lojas oficiais\n\n🛒 *Loja de Aplicativos:* https://bit.ly/lojaolympus\n\n💡 Digite "GERAR TESTE" para experimentar!`;
+      aiResponse = `📲 *VS SOLUÇÕES - Aplicativos e Downloads*\n\n📱 *Android:*\n• MultServer MAX - Código Downloader: 6469569\n• App: http://aftv.news/6469569\n\n📱 *MultServer PLUS:*\n• Código Downloader: 2572490\n• App: http://aftv.news/2572490\n\n📱 *Assist Plus / PlaySim:*\n• Código Downloader: 9465043\n\n📱 *VIZZION PLAY:*\n• Código Downloader: 5338196\n\n📱 *IPTV Smarters:*\n• Disponível nas lojas oficiais\n\n🛒 *Loja de Aplicativos:* https://bit.ly/lojaolympus\n\n💡 Digite *APIS* para escolher um servidor e testar!`;
     }
 
     // ==========================================
-    // IA GENERATIVA (para outras perguntas)
+    // 6. IA GENERATIVA (para outras perguntas)
     // ==========================================
     else {
       const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
@@ -596,9 +677,9 @@ app.post('/webhook', async (req, res) => {
           content: `Você é uma assistente especializada em IPTV da VS SOLUÇÕES. Você ajuda clientes a entenderem os benefícios da TV online, tira dúvidas sobre planos, canais, compatibilidade e configuração.
 
           REGRAS IMPORTANTES:
-          1. Se o cliente pedir TESTE, você deve orientá-lo a digitar "GERAR TESTE" ou "GERAR TESTE [NOME DA API]".
+          1. Se o cliente pedir TESTE, você deve orientá-lo a digitar "APIS" para ver os servidores e depois digitar o número correspondente.
           2. Se perguntar sobre PLANOS, informe os planos disponíveis e destaque os benefícios.
-          3. Se perguntar sobre APIS, liste todas as opções disponíveis.
+          3. Se perguntar sobre SERVIDORES, liste todos com os números.
           4. Seja educado, rápido, objetivo e use emojis para tornar a conversa mais agradável.
           5. Responda em português do Brasil.
           6. Sempre incentive o cliente a experimentar o serviço.
@@ -668,7 +749,7 @@ app.get('/status', async (req, res) => {
     database: dbStatus,
     mysqlEnabled: mysqlEnabled,
     apis: { total: API_KEYS.length, current: currentApiIndex },
-    iptv_apis: IPTV_APIS.map(api => api.name),
+    iptv_apis: IPTV_APIS.map(api => ({ id: api.id, name: api.name })),
     model: model,
     currentDateTime: getCurrentDateTime()
   });
@@ -704,21 +785,20 @@ app.get('/', (req, res) => {
       ping: 'GET /ping'
     },
     commands: {
-      'GERAR TESTE': 'Gera um teste IPTV gratuito (usa a primeira API disponível)',
-      'GERAR TESTE [NOME]': 'Gera teste com uma API específica',
-      'APIS': 'Lista todas as APIs disponíveis',
+      'APIS': 'Lista todos os servidores com números',
+      '[NÚMERO]': 'Gera teste no servidor correspondente (ex: 2)',
       'PLANOS': 'Mostra os planos disponíveis',
       'SITE / DOWNLOAD': 'Informações sobre aplicativos e downloads'
     },
-    available_apis: IPTV_APIS.map(api => api.name)
+    available_apis: IPTV_APIS.map(api => ({ id: api.id, name: api.name }))
   });
 });
 
 app.get('/apis', (req, res) => {
   res.json({
     service: 'VS SOLUÇÕES',
-    apis: IPTV_APIS.map((api, index) => ({
-      id: index + 1,
+    apis: IPTV_APIS.map(api => ({
+      id: api.id,
       name: api.name,
       url: api.url
     }))
@@ -731,9 +811,9 @@ app.get('/apis', (req, res) => {
 async function startServer() {
   console.log('🚀 Iniciando VS SOLUÇÕES - Bot IPTV com Gerador de Testes...');
   console.log(`🔑 ${API_KEYS.length} chaves IA configuradas`);
-  console.log(`📡 ${IPTV_APIS.length} APIs de teste IPTV configuradas:`);
-  IPTV_APIS.forEach((api, i) => {
-    console.log(`   ${i+1}. ${api.name}`);
+  console.log(`📡 ${IPTV_APIS.length} servidores de teste IPTV configurados:`);
+  IPTV_APIS.forEach(api => {
+    console.log(`   ${api.id}. ${api.name}`);
   });
 
   await initializeDatabase();
@@ -746,11 +826,10 @@ async function startServer() {
     console.log(`📅 Data/Hora: ${getCurrentDateTime().full}`);
     console.log(`\n🏢 VS SOLUÇÕES - Qualidade e estabilidade em IPTV`);
     console.log(`📡 Comandos disponíveis:`);
-    console.log(`   • GERAR TESTE - Gera um teste gratuito`);
-    console.log(`   • GERAR TESTE [NOME] - Gera teste com API específica`);
-    console.log(`   • APIS - Lista todas as APIs`);
-    console.log(`   • PLANOS - Mostra planos disponíveis`);
-    console.log(`   • SITE/DOWNLOAD - Informações de aplicativos`);
+    console.log(`   • APIS - Lista servidores com números`);
+    console.log(`   • [NÚMERO] - Gera teste (ex: 2)`);
+    console.log(`   • PLANOS - Mostra planos`);
+    console.log(`   • SITE/DOWNLOAD - Informações de apps`);
   });
 }
 
