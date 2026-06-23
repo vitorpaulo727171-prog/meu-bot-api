@@ -176,37 +176,8 @@ async function callAIWithFallback(messages, maxRetries = API_KEYS.length) {
 }
 
 // ============================================
-// 5. FUNÇÕES DE IPTV - VS SOLUÇÕES (extração melhorada)
+// 5. FUNÇÕES DE IPTV - VS SOLUÇÕES
 // ============================================
-function extractM3uLinks(reply) {
-  const links = [];
-  const regex = /https?:\/\/[^\s]+get\.php\?username=[^&]+&password=[^&]+&type=m3u_plus[^\s]*/gi;
-  const found = reply.match(regex);
-  if (found) {
-    // Pega também os nomes antes de cada link se existirem
-    const lines = reply.split('\n');
-    let currentName = null;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.includes('Link (M3U)')) {
-        const nameMatch = trimmed.match(/Link \(M3U\) ([^:]+):/);
-        if (nameMatch) currentName = nameMatch[1].trim();
-        // Procura a URL na mesma linha
-        const urlMatch = trimmed.match(/https?:\/\/[^\s]+/);
-        if (urlMatch) {
-          links.push({ name: currentName || 'M3U', url: urlMatch[0] });
-          currentName = null;
-        }
-      }
-    }
-    // Se não encontrou nomes, pega só as URLs
-    if (links.length === 0) {
-      found.forEach(url => links.push({ name: 'M3U', url }));
-    }
-  }
-  return links;
-}
-
 async function generateIptvTest(apiIndex = 0) {
   const api = IPTV_APIS[apiIndex % IPTV_APIS.length];
   console.log(`📡 Gerando teste IPTV via: ${api.name} (${api.url})`);
@@ -225,142 +196,27 @@ async function generateIptvTest(apiIndex = 0) {
     const data = await response.json();
     console.log(`✅ Teste IPTV gerado com sucesso - ${api.name}`);
 
-    // Extrai campos padrão
-    const dns = data.dns || 'Não informado';
-    const username = data.username || 'Não informado';
-    const password = data.password || 'Não informado';
-    const packageName = data.package || 'Plano não informado';
-    const expiresAt = data.expiresAtFormatted || data.expiresAt || 'Não informado';
-    const connections = data.connections || 1;
-    const payUrl = data.payUrl || '';
-    const reply = data.reply || '';
+    // Pega o reply completo da API
+    let reply = data.reply || '';
 
-    // Extrai links M3U com nomes
-    const m3uLinks = extractM3uLinks(reply);
-
-    // Monta mensagem
-    let message = `📺 *TESTE IPTV - VS SOLUÇÕES*\n\n`;
-    message += `📦 *Plano:* ${packageName}\n`;
-    message += `🏷️ *Servidor:* ${api.name}\n`;
-    message += `🔗 *DNS:* ${dns}\n`;
-    message += `👤 *Usuário:* ${username}\n`;
-    message += `🔒 *Senha:* ${password}\n`;
-    message += `📶 *Conexões:* ${connections}\n`;
-    message += `⏳ *Expira em:* ${expiresAt}\n\n`;
-
-    if (payUrl) {
-      message += `💳 *Assinar/Renovar:* ${payUrl}\n\n`;
+    // Se o reply estiver vazio, monta uma mensagem básica com os campos principais
+    if (!reply) {
+      reply = `📺 *TESTE IPTV - ${api.name}*\n\n`;
+      reply += `📦 *Plano:* ${data.package || 'N/A'}\n`;
+      reply += `🔗 *DNS:* ${data.dns || 'N/A'}\n`;
+      reply += `👤 *Usuário:* ${data.username || 'N/A'}\n`;
+      reply += `🔒 *Senha:* ${data.password || 'N/A'}\n`;
+      reply += `📶 *Conexões:* ${data.connections || 1}\n`;
+      reply += `⏳ *Expira em:* ${data.expiresAtFormatted || data.expiresAt || 'N/A'}\n`;
+      if (data.payUrl) reply += `💳 *Assinar:* ${data.payUrl}\n`;
+    } else {
+      // Adiciona um cabeçalho com o nome do servidor
+      reply = `📺 *TESTE IPTV - ${api.name}*\n\n` + reply;
     }
-
-    // Links M3U
-    if (m3uLinks.length > 0) {
-      message += `📺 *Links M3U:*\n`;
-      const emojis = ['🟢', '🔴', '🟡', '🟠', '🔵', '🟣'];
-      m3uLinks.forEach((item, i) => {
-        const emoji = emojis[i % emojis.length];
-        message += `${emoji} *${item.name}*: ${item.url}\n`;
-      });
-      message += `\n`;
-    }
-
-    // Aplicativos - extração genérica
-    // 1. MultServer MAX / PLUS
-    const appRegex = /📺 APLICATIVO ANDROID: (MultServer\s*(?:MAX|PLUS)).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?Código Downloader:\s*([^\s*]+).*?APLICATIVO:\s*([^\s*]+)/is;
-    const appMatch = reply.match(appRegex);
-    if (appMatch) {
-      message += `📱 *${appMatch[1]}*\n`;
-      message += `👤 Usuário: ${appMatch[2]}\n`;
-      message += `🔒 Senha: ${appMatch[3]}\n`;
-      message += `📥 Downloader: ${appMatch[4]}\n`;
-      message += `📲 App: ${appMatch[5]}\n\n`;
-    }
-
-    // 2. Assist plus / PlaySim
-    const assistRegex = /Assist plus.*?Código:\s*([^\s*]+).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DOWLOADER:\s*([^\s*]+)/is;
-    const assistMatch = reply.match(assistRegex);
-    if (assistMatch) {
-      message += `📱 *Assist Plus / PlaySim*\n`;
-      message += `🆔 Código: ${assistMatch[1]}\n`;
-      message += `👤 Usuário: ${assistMatch[2]}\n`;
-      message += `🔒 Senha: ${assistMatch[3]}\n`;
-      message += `📥 Downloader: ${assistMatch[4]}\n\n`;
-    }
-
-    // 3. VIZZION PLAY
-    const vizzionRegex = /VIZZION PLAY.*?Login:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DOWLOADER:\s*([^\s*]+)/is;
-    const vizzionMatch = reply.match(vizzionRegex);
-    if (vizzionMatch) {
-      message += `📱 *VIZZION PLAY*\n`;
-      message += `👤 Usuário: ${vizzionMatch[1]}\n`;
-      message += `🔒 Senha: ${vizzionMatch[2]}\n`;
-      message += `📥 Downloader: ${vizzionMatch[3]}\n\n`;
-    }
-
-    // 4. IPTV Smarters
-    const smartersRegex = /IPTV SMARTERS.*?Nome:\s*([^\n*]+).*?Usuário:\s*([^\s*]+).*?Senha:\s*([^\s*]+).*?DNS SMARTERS:\s*([^\s*]+)/is;
-    const smartersMatch = reply.match(smartersRegex);
-    if (smartersMatch) {
-      message += `📱 *IPTV Smarters*\n`;
-      message += `📺 Nome: ${smartersMatch[1].trim()}\n`;
-      message += `👤 Usuário: ${smartersMatch[2]}\n`;
-      message += `🔒 Senha: ${smartersMatch[3]}\n`;
-      message += `🔗 DNS: ${smartersMatch[4]}\n\n`;
-    }
-
-    // 5. DNS STB / SmartUp
-    const stbRegex = /DNS STB \/ SmartUp:\s*([^\s]+)/i;
-    const stbMatch = reply.match(stbRegex);
-    if (stbMatch) {
-      message += `📡 *DNS STB / SmartUp:* ${stbMatch[1]}\n\n`;
-    }
-
-    // 6. Loja de aplicativos
-    const storeRegex = /LOJA DE APLICATIVOS:\s*([^\s]+)/i;
-    const storeMatch = reply.match(storeRegex);
-    if (storeMatch) {
-      message += `🛒 *Loja de Aplicativos:* ${storeMatch[1]}\n\n`;
-    }
-
-    // Caso especial UNITV (não tem aplicativos padrão, mas tem código de ativação)
-    if (api.name.includes('UNITV')) {
-      const unitvRegex = /✅ CÓDIGO DE ATIVAÇÃO:\s*([^\s]+)/i;
-      const unitvMatch = reply.match(unitvRegex);
-      if (unitvMatch) {
-        message += `🔑 *Código de Ativação UNITV:* ${unitvMatch[1]}\n\n`;
-      }
-      const downloadRegex = /📥 DOWNLOAD:\s*([^\s]+)/i;
-      const downloadMatch = reply.match(downloadRegex);
-      if (downloadMatch) {
-        message += `📲 *Download:* ${downloadMatch[1]}\n`;
-      }
-      const downloaderRegex = /CÓDIGO DOWNLOADER:\s*([^\s]+)/i;
-      const downloaderMatch = reply.match(downloaderRegex);
-      if (downloaderMatch) {
-        message += `📥 *Downloader:* ${downloaderMatch[1]}\n\n`;
-      }
-    }
-
-    // Caso BOX PLAYER (mostra múltiplos códigos)
-    if (api.name.includes('BOX PLAYER')) {
-      const boxCodes = reply.match(/CÓDIGO ([^:]+):\s*([^\s]+)/gi);
-      if (boxCodes) {
-        message += `📱 *Códigos para aplicativos:*\n`;
-        boxCodes.forEach(code => {
-          const clean = code.replace(/[✅*]/g, '').trim();
-          message += `• ${clean}\n`;
-        });
-        message += `\n`;
-      }
-    }
-
-    message += `─────────────────────\n`;
-    message += `💡 *Dica:* Salve essa mensagem para ter tudo à mão!\n`;
-    message += `🛟 *Dúvidas?* Fale com nosso suporte.\n`;
-    message += `🏢 *VS SOLUÇÕES* - Qualidade e estabilidade em IPTV`;
 
     return {
       success: true,
-      message: message,
+      message: reply,
       raw: data,
       apiName: api.name,
       apiId: api.id
@@ -417,7 +273,6 @@ async function initializeDatabase() {
 
     const connection = await pool.getConnection();
 
-    // Tabela de conversas
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS conversations (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -433,7 +288,6 @@ async function initializeDatabase() {
       )
     `);
 
-    // Tabela de planos IPTV
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS iptv_plans (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -591,20 +445,20 @@ app.post('/webhook', async (req, res) => {
     const lowerMsg = senderMessage.toLowerCase().trim();
 
     // ==========================================
-    // 1. DETECTA INTENÇÃO: LISTAR APIS
+    // 1. LISTAR SERVIDORES
     // ==========================================
     if (lowerMsg.includes('apis') || lowerMsg.includes('lista') || lowerMsg.includes('opções') || lowerMsg.includes('quais') || lowerMsg.includes('servidores')) {
       let apiList = `📡 *SERVIDORES DISPONÍVEIS - VS SOLUÇÕES*\n\n`;
       IPTV_APIS.forEach(api => {
         apiList += `${api.id}. ${api.name}\n`;
       });
-      apiList += `\n💡 Digite o *número* do servidor para gerar seu teste.\n`;
-      apiList += `Exemplo: *2* para OBA W2 COM ADULTO`;
+      apiList += `\n💡 Digite o *número* do servidor para gerar seu teste.`;
+      apiList += `\nExemplo: *2* para OBA W2 COM ADULTO`;
       aiResponse = apiList;
     }
 
     // ==========================================
-    // 2. DETECTA INTENÇÃO: GERAR TESTE POR NÚMERO
+    // 2. NÚMERO - GERAR TESTE
     // ==========================================
     else if (/^\d+$/.test(senderMessage.trim())) {
       const number = parseInt(senderMessage.trim());
@@ -615,7 +469,7 @@ app.post('/webhook', async (req, res) => {
         if (testResult.success) {
           aiResponse = testResult.message;
         } else {
-          // Tenta outros servidores em fallback
+          // Fallback: tenta outros servidores
           let fallbackResult = null;
           for (let i = 0; i < IPTV_APIS.length; i++) {
             if (i === api.id - 1) continue;
@@ -634,10 +488,9 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 3. DETECTA INTENÇÃO: TESTE POR PALAVRA (sem número)
+    // 3. PALAVRAS DE TESTE (sem número)
     // ==========================================
     else if (lowerMsg.includes('teste') || lowerMsg.includes('experimentar') || lowerMsg.includes('gratis') || lowerMsg.includes('grátis') || lowerMsg.includes('quero testar') || lowerMsg.includes('gerar')) {
-      // Se não mencionou número, oferece a lista
       let apiList = `📡 *ESCOLHA O SERVIDOR PARA SEU TESTE - VS SOLUÇÕES*\n\n`;
       IPTV_APIS.forEach(api => {
         apiList += `${api.id}. ${api.name}\n`;
@@ -647,7 +500,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 4. PERGUNTA SOBRE PLANOS
+    // 4. PLANOS
     // ==========================================
     else if (lowerMsg.includes('plano') || lowerMsg.includes('planos') || lowerMsg.includes('preço') || lowerMsg.includes('valor') || lowerMsg.includes('quanto custa') || lowerMsg.includes('preços')) {
       const plans = await getIptvPlans();
@@ -659,14 +512,14 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 5. DETECTA INTENÇÃO: SITE/DOWNLOAD
+    // 5. SITE / DOWNLOAD
     // ==========================================
     else if (lowerMsg.includes('site') || lowerMsg.includes('download') || lowerMsg.includes('aplicativo') || lowerMsg.includes('app') || lowerMsg.includes('baixar')) {
       aiResponse = `📲 *VS SOLUÇÕES - Aplicativos e Downloads*\n\n📱 *Android:*\n• MultServer MAX - Código Downloader: 6469569\n• App: http://aftv.news/6469569\n\n📱 *MultServer PLUS:*\n• Código Downloader: 2572490\n• App: http://aftv.news/2572490\n\n📱 *Assist Plus / PlaySim:*\n• Código Downloader: 9465043\n\n📱 *VIZZION PLAY:*\n• Código Downloader: 5338196\n\n📱 *IPTV Smarters:*\n• Disponível nas lojas oficiais\n\n🛒 *Loja de Aplicativos:* https://bit.ly/lojaolympus\n\n💡 Digite *APIS* para escolher um servidor e testar!`;
     }
 
     // ==========================================
-    // 6. IA GENERATIVA (para outras perguntas)
+    // 6. IA GENERATIVA (outras perguntas)
     // ==========================================
     else {
       const history = await getConversationHistory(senderName, groupName, isMessageFromGroup, 6);
@@ -680,7 +533,7 @@ app.post('/webhook', async (req, res) => {
           1. Se o cliente pedir TESTE, você deve orientá-lo a digitar "APIS" para ver os servidores e depois digitar o número correspondente.
           2. Se perguntar sobre PLANOS, informe os planos disponíveis e destaque os benefícios.
           3. Se perguntar sobre SERVIDORES, liste todos com os números.
-          4. Seja educado, rápido, objetivo e use emojis para tornar a conversa mais agradável.
+          4. Seja educado, rápido, objetivo e use emojis.
           5. Responda em português do Brasil.
           6. Sempre incentive o cliente a experimentar o serviço.
           7. Destaque que a VS SOLUÇÕES oferece qualidade e estabilidade.
